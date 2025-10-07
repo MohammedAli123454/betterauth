@@ -1,5 +1,7 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { createFieldAttribute } from 'better-auth/db';
+import { admin } from 'better-auth/plugins';
 import { db } from '@/db';
 
 export const auth = betterAuth({
@@ -8,31 +10,35 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: false, // Set to true when email service is configured
+    disableSignUp: false,
+    requireEmailVerification: false,
+    minPasswordLength: 8,
   },
   // OAuth Providers
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID || '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+      disableSignUp: true,
     },
     github: {
       clientId: process.env.GITHUB_CLIENT_ID || '',
       clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
+      disableSignUp: true,
     },
   },
-  // Email configuration for verification emails
-  // emailVerification: {
-  //   sendVerificationEmail: async ({ user, url }) => {
-  //     // In production, use a real email service like Resend, SendGrid, etc.
-  //     console.log(`Send verification email to ${user.email}: ${url}`);
-  //     // Example with Resend:
-  //     // await resend.emails.send({
-  //     //   from: 'noreply@yourdomain.com',
-  //     //   to: user.email,
-  //     //   subject: 'Verify your email',
-  //     //   html: `Click here to verify: <a href="${url}">${url}</a>`
-  //     // });
-  //   },
-  // },
+  user: {
+    additionalFields: {
+      role: createFieldAttribute('string', {
+        defaultValue: 'user',
+        fieldName: 'role',
+        input: false,
+      }),
+    },
+  },
+  plugins: [
+    admin({
+      impersonationSessionDuration: 60 * 60, // 1 hour
+    }),
+  ],
 });

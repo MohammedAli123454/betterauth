@@ -7,11 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "make-admin": "dotenv -e .env.local -- tsx scripts/make-admin.ts"
+    "make-admin": "dotenv -e .env.local -- tsx scripts/make-admin.ts",
+    "db:studio": "dotenv -e .env.local -- npx drizzle-kit studio"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.2",
     "bcrypt": "^6.0.0",
-    "better-auth": "^1.3.26",
+    "better-auth": "^1.3.27",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.44.6",

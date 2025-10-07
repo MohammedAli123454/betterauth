@@ -1,19 +1,40 @@
 'use client';
 
 import { authClient } from '@/lib/auth-client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
   const [message, setMessage] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isFirstUser, setIsFirstUser] = useState<boolean | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
+
+  useEffect(() => {
+    const checkFirstUser = async () => {
+      try {
+        const response = await fetch('/api/check-first-user');
+        const data = await response.json();
+        setIsFirstUser(data.isEmpty);
+      } catch (error) {
+        console.error('Error checking first user:', error);
+        setIsFirstUser(false);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    checkFirstUser();
+  }, []);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage('');
+    setIsSubmitting(true);
     try {
       const result = await authClient.signIn.email({
         email,
@@ -25,29 +46,56 @@ export default function LoginPage() {
         router.push('/dashboard');
       }
     } catch (error) {
+      console.error('Sign in error:', error);
       setMessage('Sign in failed');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage('');
+    setIsSubmitting(true);
     try {
-      const result = await authClient.signUp.email({
-        email,
-        password,
-        name: email.split('@')[0],
+      const response = await fetch('/api/auth/signup-first-admin', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password, name }),
       });
-      if (result.error) {
-        setMessage(result.error.message || 'Sign up failed');
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        setMessage(data.error || 'Sign up failed');
       } else {
-        setMessage('Account created! Signing you in...');
+        setMessage('Admin account created! Redirecting...');
         setTimeout(() => router.push('/dashboard'), 1000);
       }
     } catch (error) {
+      console.error('Sign up error:', error);
       setMessage('Sign up failed');
+    } finally {
+      setIsSubmitting(false);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div
+        style={{
+          maxWidth: '400px',
+          margin: '100px auto',
+          padding: '20px',
+          textAlign: 'center',
+        }}
+      >
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div
@@ -60,10 +108,12 @@ export default function LoginPage() {
       }}
     >
       <h1 style={{ marginBottom: '10px' }}>
-        {isSignUp ? 'Create Account' : 'Welcome Back'}
+        {isFirstUser ? 'Create First Admin' : 'Welcome Back'}
       </h1>
-      <p style={{ color: '#666', marginBottom: '30px' }}>
-        {isSignUp ? 'Sign up to get started' : 'Sign in to your account'}
+      <p style={{ color: '#666', marginBottom: '20px' }}>
+        {isFirstUser
+          ? 'Create the first admin account'
+          : 'Sign in with your credentials'}
       </p>
 
       {message && (
@@ -71,25 +121,37 @@ export default function LoginPage() {
           style={{
             padding: '10px',
             marginBottom: '10px',
-            backgroundColor: message.includes('success') || message.includes('created')
+            backgroundColor: message.includes('created')
               ? '#d4edda'
               : '#f8d7da',
             border: `1px solid ${
-              message.includes('success') || message.includes('created')
-                ? '#c3e6cb'
-                : '#f5c6cb'
+              message.includes('created') ? '#c3e6cb' : '#f5c6cb'
             }`,
             borderRadius: '4px',
-            color: message.includes('success') || message.includes('created')
-              ? '#155724'
-              : '#721c24',
+            color: message.includes('created') ? '#155724' : '#721c24',
           }}
         >
           {message}
         </div>
       )}
 
-      <form onSubmit={isSignUp ? handleSignUp : handleSignIn}>
+      <form onSubmit={isFirstUser ? handleSignUp : handleSignIn}>
+        {isFirstUser && (
+          <input
+            type="text"
+            placeholder="Name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{
+              width: '100%',
+              padding: '8px',
+              marginBottom: '10px',
+              border: '1px solid #ddd',
+              borderRadius: '4px',
+            }}
+            required
+          />
+        )}
         <input
           type="email"
           placeholder="Email"
@@ -102,6 +164,7 @@ export default function LoginPage() {
             border: '1px solid #ddd',
             borderRadius: '4px',
           }}
+          autoComplete="email"
           required
         />
         <input
@@ -116,6 +179,7 @@ export default function LoginPage() {
             border: '1px solid #ddd',
             borderRadius: '4px',
           }}
+          autoComplete={isFirstUser ? 'new-password' : 'current-password'}
           required
         />
         <button
@@ -123,37 +187,25 @@ export default function LoginPage() {
           style={{
             width: '100%',
             padding: '10px',
-            backgroundColor: '#0070f3',
+            backgroundColor: isSubmitting ? '#999' : '#0070f3',
             color: 'white',
             border: 'none',
             borderRadius: '4px',
-            cursor: 'pointer',
+            cursor: isSubmitting ? 'not-allowed' : 'pointer',
             fontSize: '16px',
-            marginBottom: '10px',
+            transition: 'background-color 0.2s ease-in-out',
           }}
+          disabled={isSubmitting}
         >
-          {isSignUp ? 'Sign Up' : 'Sign In'}
+          {isSubmitting
+            ? isFirstUser
+              ? 'Creating...'
+              : 'Signing in…'
+            : isFirstUser
+            ? 'Create Admin Account'
+            : 'Sign In'}
         </button>
       </form>
-
-      <button
-        type="button"
-        onClick={() => setIsSignUp(!isSignUp)}
-        style={{
-          width: '100%',
-          padding: '10px',
-          backgroundColor: 'transparent',
-          color: '#0070f3',
-          border: '1px solid #0070f3',
-          borderRadius: '4px',
-          cursor: 'pointer',
-          fontSize: '14px',
-        }}
-      >
-        {isSignUp
-          ? 'Already have an account? Sign In'
-          : "Don't have an account? Sign Up"}
-      </button>
     </div>
   );
 }

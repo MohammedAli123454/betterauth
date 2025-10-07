@@ -1,16 +1,20 @@
-import { auth } from './auth';
 import { headers } from 'next/headers';
+import { auth } from './auth';
 
-export async function requireAuth() {
-  const session = await auth.api.getSession({
+export type AuthSession = NonNullable<
+  Awaited<ReturnType<typeof auth.api.getSession>>
+>;
+
+export async function requireAuth(): Promise<AuthSession> {
+  const sessionResponse = await auth.api.getSession({
     headers: await headers(),
   });
 
-  if (!session) {
+  if (!sessionResponse || !sessionResponse.user) {
     throw new Error('Unauthorized');
   }
 
-  return session;
+  return sessionResponse;
 }
 
 export async function requireRole(role: 'admin' | 'user') {
