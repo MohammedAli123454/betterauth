@@ -6,6 +6,7 @@ import { eq } from 'drizzle-orm';
 import arcjet, { detectBot, shield, slidingWindow } from '@arcjet/next';
 import { findIp } from '@arcjet/ip';
 import { auth } from '@/lib/auth';
+import { logEmployeeUpdate, logEmployeeDelete } from '@/lib/audit-logger';
 
 const aj = arcjet({
   key: process.env.ARCJET_KEY!,
@@ -72,6 +73,14 @@ export async function PATCH(
       );
     }
 
+    // Track changes for audit log
+    const changes: any = {};
+    if (name && name !== existingEmployee[0].name) changes.name = { old: existingEmployee[0].name, new: name };
+    if (email && email !== existingEmployee[0].email) changes.email = { old: existingEmployee[0].email, new: email };
+    if (position && position !== existingEmployee[0].position) changes.position = { old: existingEmployee[0].position, new: position };
+    if (department && department !== existingEmployee[0].department) changes.department = { old: existingEmployee[0].department, new: department };
+    if (salary && salary.toString() !== existingEmployee[0].salary) changes.salary = { old: existingEmployee[0].salary, new: salary.toString() };
+
     // Update employee
     const updatedEmployee = await db
       .update(employee)
@@ -87,6 +96,14 @@ export async function PATCH(
       })
       .where(eq(employee.id, id))
       .returning();
+
+    // Log audit
+    await logEmployeeUpdate(
+      session.user.id,
+      id,
+      changes,
+      request
+    );
 
     return NextResponse.json({
       success: true,
@@ -131,7 +148,7 @@ export async function DELETE(
   if (arcjetResponse) return arcjetResponse;
 
   try {
-    await requireRole(['admin']);
+    const session = await requireRole(['admin']);
     const { id } = await params;
 
     // Check if employee exists
@@ -150,6 +167,17 @@ export async function DELETE(
 
     // Delete employee
     await db.delete(employee).where(eq(employee.id, id));
+
+    // Log audit
+    await logEmployeeDelete(
+      session.user.id,
+      id,
+      {
+        name: existingEmployee[0].name,
+        email: existingEmployee[0].email,
+      },
+      request
+    );
 
     return NextResponse.json({
       success: true,

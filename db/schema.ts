@@ -63,3 +63,17 @@ export const employee = pgTable('employee', {
   createdBy: text('createdBy').references(() => user.id),
   updatedBy: text('updatedBy').references(() => user.id),
 });
+
+export const auditLog = pgTable('audit_log', {
+  id: text('id').primaryKey(),
+  userId: text('userId')
+    .notNull()
+    .references(() => user.id),
+  action: text('action').notNull(), // CREATE, UPDATE, DELETE, LOGIN, LOGOUT, etc.
+  resource: text('resource').notNull(), // employee, user, etc.
+  resourceId: text('resourceId'), // ID of the affected resource
+  details: text('details'), // JSON string with additional details
+  ipAddress: text('ipAddress'),
+  userAgent: text('userAgent'),
+  createdAt: timestamp('createdAt', { mode: 'date' }).notNull().defaultNow(),
+});

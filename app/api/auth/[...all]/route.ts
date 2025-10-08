@@ -1,43 +1,22 @@
 import { auth } from '@/lib/auth';
 import { toNextJsHandler } from 'better-auth/next-js';
-import arcjet, {
-  BotOptions,
+import {
   detectBot,
-  EmailOptions,
   protectSignup,
   shield,
   slidingWindow,
-  SlidingWindowRateLimitOptions,
 } from '@arcjet/next';
 import { findIp } from '@arcjet/ip';
-
-const aj = arcjet({
-  key: process.env.ARCJET_KEY!,
-  characteristics: ['userIdOrIp'],
-  rules: [shield({ mode: 'LIVE' })],
-});
-
-const botSettings = {
-  mode: 'LIVE',
-  allow: [],
-} satisfies BotOptions;
-
-const restrictiveRateLimitSettings = {
-  mode: 'LIVE',
-  max: 2, // Change to 5 or 10 for easier testing, then change back to 2
-  interval: '10m',
-} satisfies SlidingWindowRateLimitOptions<[]>;
-
-const laxRateLimitSettings = {
-  mode: 'LIVE',
-  max: 60,
-  interval: '1m',
-} satisfies SlidingWindowRateLimitOptions<[]>;
-
-const emailSettings = {
-  mode: 'LIVE',
-  block: ['DISPOSABLE', 'INVALID', 'NO_MX_RECORDS'],
-} satisfies EmailOptions;
+import {
+  aj,
+  botSettings,
+  emailSettings,
+  authRateLimitSettings,
+  laxRateLimitSettings,
+  shieldSettings,
+  arcjetErrorMessages,
+  getEmailErrorMessage,
+} from '@/lib/arcjet-config';
 
 const authHandlers = toNextJsHandler(auth);
 export const { GET } = authHandlers;
@@ -49,26 +28,15 @@ export async function POST(request: Request) {
   if (decision.isDenied()) {
     if (decision.reason.isRateLimit()) {
       return Response.json(
-        { error: 'Rate limit reached. You can only attempt login 2 times per 10 minutes. Please try again later.' },
+        { error: arcjetErrorMessages.rateLimit.auth },
         { status: 429 }
       );
     } else if (decision.reason.isEmail()) {
-      let message: string;
-
-      if (decision.reason.emailTypes.includes('INVALID')) {
-        message = 'Email address format is invalid.';
-      } else if (decision.reason.emailTypes.includes('DISPOSABLE')) {
-        message = 'Disposable email addresses are not allowed.';
-      } else if (decision.reason.emailTypes.includes('NO_MX_RECORDS')) {
-        message = 'Email domain is not valid.';
-      } else {
-        message = 'Invalid email.';
-      }
-
+      const message = getEmailErrorMessage(decision.reason.emailTypes);
       return Response.json({ error: message }, { status: 400 });
     } else {
       return Response.json(
-        { error: 'Access forbidden.' },
+        { error: arcjetErrorMessages.general.forbidden },
         { status: 403 }
       );
     }
@@ -95,14 +63,14 @@ async function checkArcjet(request: Request) {
           protectSignup({
             email: emailSettings,
             bots: botSettings,
-            rateLimit: restrictiveRateLimitSettings,
+            rateLimit: authRateLimitSettings,
           })
         )
         .protect(request, { email: body.email, userIdOrIp });
     } else {
       return aj
         .withRule(detectBot(botSettings))
-        .withRule(slidingWindow(restrictiveRateLimitSettings))
+        .withRule(slidingWindow(authRateLimitSettings))
         .protect(request, { userIdOrIp });
     }
   }
@@ -111,7 +79,7 @@ async function checkArcjet(request: Request) {
   if (request.url.endsWith('/sign-in/email')) {
     return aj
       .withRule(detectBot(botSettings))
-      .withRule(slidingWindow(restrictiveRateLimitSettings))
+      .withRule(slidingWindow(authRateLimitSettings))
       .protect(request, { userIdOrIp });
   }
 

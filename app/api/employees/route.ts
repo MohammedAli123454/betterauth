@@ -4,47 +4,35 @@ import { employee } from '@/db/schema';
 import { requireRole } from '@/lib/auth-utils';
 import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
-import arcjet, { detectBot, shield, slidingWindow } from '@arcjet/next';
+import { slidingWindow } from '@arcjet/next';
 import { findIp } from '@arcjet/ip';
 import { auth } from '@/lib/auth';
-
-// Base Arcjet instance with shield and bot detection
-const aj = arcjet({
-  key: process.env.ARCJET_KEY!,
-  characteristics: ['userId'], // Track by userId instead of IP
-  rules: [
-    shield({ mode: 'LIVE' }),
-    detectBot({
-      mode: 'LIVE',
-      allow: [], // Block all automated requests
-    }),
-  ],
-});
+import {
+  aj,
+  employeeCreationRateLimitSettings,
+  employeeReadRateLimitSettings,
+  arcjetErrorMessages,
+} from '@/lib/arcjet-config';
+import { logEmployeeCreate } from '@/lib/audit-logger';
 
 // Rate limit for reading employees (generous)
 async function protectGetRequest(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
-  const userId = session?.user.id || findIp(request) || '127.0.0.1';
+  const userIdOrIp = session?.user.id || findIp(request) || '127.0.0.1';
 
   const decision = await aj
-    .withRule(
-      slidingWindow({
-        mode: 'LIVE',
-        max: 100, // 100 reads per minute
-        interval: '1m',
-      })
-    )
-    .protect(request, { userId });
+    .withRule(slidingWindow(employeeReadRateLimitSettings))
+    .protect(request, { userIdOrIp });
 
   if (decision.isDenied()) {
     if (decision.reason.isRateLimit()) {
       return NextResponse.json(
-        { success: false, error: 'Too many requests. Please slow down.' },
+        { success: false, error: arcjetErrorMessages.rateLimit.employeeRead },
         { status: 429 }
       );
     }
     return NextResponse.json(
-      { success: false, error: 'Access forbidden.' },
+      { success: false, error: arcjetErrorMessages.general.forbidden },
       { status: 403 }
     );
   }
@@ -55,30 +43,24 @@ async function protectGetRequest(request: Request) {
 // Rate limit for creating employees (restrictive)
 async function protectPostRequest(request: Request) {
   const session = await auth.api.getSession({ headers: request.headers });
-  const userId = session?.user.id || findIp(request) || '127.0.0.1';
+  const userIdOrIp = session?.user.id || findIp(request) || '127.0.0.1';
 
   const decision = await aj
-    .withRule(
-      slidingWindow({
-        mode: 'LIVE',
-        max: 2, // Only 2 employee creations per 10 minutes
-        interval: '10m',
-      })
-    )
-    .protect(request, { userId });
+    .withRule(slidingWindow(employeeCreationRateLimitSettings))
+    .protect(request, { userIdOrIp });
 
   if (decision.isDenied()) {
     if (decision.reason.isRateLimit()) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Rate limit reached. You can only create 2 employees per 10 minutes.'
+          error: arcjetErrorMessages.rateLimit.employeeCreate
         },
         { status: 429 }
       );
     }
     return NextResponse.json(
-      { success: false, error: 'Access forbidden.' },
+      { success: false, error: arcjetErrorMessages.general.forbidden },
       { status: 403 }
     );
   }
@@ -141,8 +123,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Create employee
+    const employeeId = nanoid();
     const newEmployee = await db.insert(employee).values({
-      id: nanoid(),
+      id: employeeId,
       name,
       email,
       position,
@@ -152,6 +135,14 @@ export async function POST(request: NextRequest) {
       createdBy: session.user.id,
       updatedBy: session.user.id,
     }).returning();
+
+    // Log audit
+    await logEmployeeCreate(
+      session.user.id,
+      employeeId,
+      { name, email, position, department },
+      request
+    );
 
     return NextResponse.json(
       { success: true, data: newEmployee[0] },
