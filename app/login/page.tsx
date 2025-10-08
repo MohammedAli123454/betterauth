@@ -35,20 +35,40 @@ export default function LoginPage() {
     e.preventDefault();
     setMessage('');
     setIsSubmitting(true);
+
     try {
-      const result = await authClient.signIn.email({
-        email,
-        password,
+      // Direct fetch to get proper error messages from Arcjet
+      const response = await fetch('/api/auth/sign-in/email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email, password }),
       });
-      if (result.error) {
-        setMessage(result.error.message || 'Sign in failed');
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        // Handle rate limit (429) and other errors
+        setMessage(data.error || 'Sign in failed');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (data.error) {
+        setMessage(data.error || 'Sign in failed');
+        setIsSubmitting(false);
       } else {
-        router.push('/dashboard');
+        // Wait a moment for session to be written to database
+        setMessage('Sign in successful! Redirecting...');
+        await new Promise(resolve => setTimeout(resolve, 500));
+
+        // Use window.location for a full page reload to ensure middleware gets fresh session
+        window.location.href = '/dashboard';
       }
     } catch (error) {
       console.error('Sign in error:', error);
       setMessage('Sign in failed');
-    } finally {
       setIsSubmitting(false);
     }
   };
@@ -70,14 +90,15 @@ export default function LoginPage() {
 
       if (!response.ok || data.error) {
         setMessage(data.error || 'Sign up failed');
+        setIsSubmitting(false);
       } else {
         setMessage('Admin account created! Redirecting...');
-        setTimeout(() => router.push('/dashboard'), 1000);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        window.location.href = '/dashboard';
       }
     } catch (error) {
       console.error('Sign up error:', error);
       setMessage('Sign up failed');
-    } finally {
       setIsSubmitting(false);
     }
   };

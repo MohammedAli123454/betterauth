@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, numeric } from 'drizzle-orm/pg-core';
 
 export const user = pgTable('user', {
   id: text('id').primaryKey(),
@@ -6,7 +6,7 @@ export const user = pgTable('user', {
   email: text('email').notNull().unique(),
   emailVerified: boolean('emailVerified').notNull().default(false),
   image: text('image'),
-  role: text('role').notNull().default('user'),
+  role: text('role').notNull().default('user'), // user, super_user, admin
   banned: boolean('banned').notNull().default(false),
   banReason: text('banReason'),
   banExpires: timestamp('banExpires', { mode: 'date' }),
@@ -48,4 +48,18 @@ export const verification = pgTable('verification', {
   identifier: text('identifier').notNull(),
   value: text('value').notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+});
+
+export const employee = pgTable('employee', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  email: text('email').notNull().unique(),
+  position: text('position').notNull(),
+  department: text('department').notNull(),
+  salary: numeric('salary', { precision: 10, scale: 2 }).notNull(),
+  hireDate: timestamp('hireDate', { mode: 'date' }).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().defaultNow(),
+  createdBy: text('createdBy').references(() => user.id),
+  updatedBy: text('updatedBy').references(() => user.id),
 });

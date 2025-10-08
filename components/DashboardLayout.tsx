@@ -7,7 +7,7 @@ import Sidebar from './Sidebar';
 
 type DashboardLayoutProps = {
   children: React.ReactNode;
-  requiredRole?: 'admin' | 'user';
+  requiredRole?: 'admin' | 'super_user' | 'user';
 };
 
 export default function DashboardLayout({

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { authClient } from '@/lib/auth-client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import DashboardLayout from '@/components/DashboardLayout';
+import { toast } from 'sonner';
 
 type Employee = {
   id: string;
@@ -19,6 +20,7 @@ export default function EmployeesPage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>('');
+  const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -32,58 +34,52 @@ export default function EmployeesPage() {
   useEffect(() => {
     const getUser = async () => {
       const session = await authClient.getSession();
-      if (session?.data?.user) {
+      if (session?.data?.user?.role) {
         setCurrentUserRole(session.data.user.role);
       }
     };
     getUser();
   }, []);
 
-  // Mock data query (replace with real API)
   const { data: employees, isLoading } = useQuery({
     queryKey: ['employees'],
     queryFn: async (): Promise<Employee[]> => {
-      // Simulate API call
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      return [
-        {
-          id: '1',
-          name: 'John Doe',
-          email: 'john@example.com',
-          position: 'Software Engineer',
-          department: 'Engineering',
-          salary: 75000,
-          hireDate: '2023-01-15',
-        },
-        {
-          id: '2',
-          name: 'Jane Smith',
-          email: 'jane@example.com',
-          position: 'Product Manager',
-          department: 'Product',
-          salary: 85000,
-          hireDate: '2022-06-20',
-        },
-        {
-          id: '3',
-          name: 'Bob Johnson',
-          email: 'bob@example.com',
-          position: 'Designer',
-          department: 'Design',
-          salary: 70000,
-          hireDate: '2023-03-10',
-        },
-      ];
+      const response = await fetch('/api/employees');
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch employees');
+      }
+
+      return result.data.map((emp: any) => ({
+        ...emp,
+        salary: parseFloat(emp.salary),
+      }));
     },
   });
 
   const createEmployeeMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const response = await fetch('/api/employees', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...data,
+          salary: parseFloat(data.salary),
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to create employee');
+      }
+
       return {
-        id: Date.now().toString(),
-        ...data,
-        salary: parseFloat(data.salary),
+        ...result.data,
+        salary: parseFloat(result.data.salary),
       };
     },
     onMutate: async (newEmployee) => {
@@ -101,8 +97,14 @@ export default function EmployeesPage() {
 
       return { previousEmployees };
     },
-    onError: (err, newEmployee, context) => {
+    onError: (error, newEmployee, context) => {
       queryClient.setQueryData(['employees'], context?.previousEmployees);
+      setMessage({ text: error.message || 'An unexpected error occurred', type: 'error' });
+      toast.error('Failed to create employee', {
+        description: error.message || 'An unexpected error occurred'
+      });
+      // Clear message after 5 seconds
+      setTimeout(() => setMessage(null), 5000);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
@@ -115,13 +117,35 @@ export default function EmployeesPage() {
         hireDate: '',
       });
       setShowCreateForm(false);
+      setMessage({ text: 'The employee has been successfully added.', type: 'success' });
+      toast.success('Employee created', {
+        description: 'The employee has been successfully added.'
+      });
+      // Clear message after 5 seconds
+      setTimeout(() => setMessage(null), 5000);
     },
   });
 
   const updateEmployeeMutation = useMutation({
     mutationFn: async (employee: Employee) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      return employee;
+      const response = await fetch(`/api/employees/${employee.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(employee),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to update employee');
+      }
+
+      return {
+        ...result.data,
+        salary: parseFloat(result.data.salary),
+      };
     },
     onMutate: async (updatedEmployee) => {
       await queryClient.cancelQueries({ queryKey: ['employees'] });
@@ -135,18 +159,33 @@ export default function EmployeesPage() {
 
       return { previousEmployees };
     },
-    onError: (err, variables, context) => {
+    onError: (error, variables, context) => {
       queryClient.setQueryData(['employees'], context?.previousEmployees);
+      toast.error('Failed to update employee', {
+        description: error.message || 'An unexpected error occurred'
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
       setEditingEmployee(null);
+      toast.success('Employee updated', {
+        description: 'The employee has been successfully updated.'
+      });
     },
   });
 
   const deleteEmployeeMutation = useMutation({
     mutationFn: async (id: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const response = await fetch(`/api/employees/${id}`, {
+        method: 'DELETE',
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to delete employee');
+      }
+
       return id;
     },
     onMutate: async (id) => {
@@ -159,35 +198,53 @@ export default function EmployeesPage() {
 
       return { previousEmployees };
     },
-    onError: (err, id, context) => {
+    onError: (error, id, context) => {
       queryClient.setQueryData(['employees'], context?.previousEmployees);
+      toast.error('Failed to delete employee', {
+        description: error.message || 'An unexpected error occurred'
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['employees'] });
+      toast.success('Employee deleted', {
+        description: 'The employee has been successfully removed.'
+      });
     },
   });
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUserRole !== 'admin') {
-      alert('Access Denied: Only administrators can create employees.');
-      return;
-    }
 
     if (editingEmployee) {
+      // Only admin can edit
+      if (currentUserRole !== 'admin') {
+        toast.error('Access Denied', {
+          description: 'Only administrators can edit employees.'
+        });
+        return;
+      }
       updateEmployeeMutation.mutate({
         ...editingEmployee,
         ...formData,
         salary: parseFloat(formData.salary),
       });
     } else {
+      // Only admin and super_user can create
+      if (currentUserRole !== 'admin' && currentUserRole !== 'super_user') {
+        toast.error('Access Denied', {
+          description: 'Only administrators and super users can create employees.'
+        });
+        return;
+      }
       createEmployeeMutation.mutate(formData);
     }
   };
 
   const handleEdit = (employee: Employee) => {
     if (currentUserRole !== 'admin') {
-      alert('Access Denied: Only administrators can edit employees.');
+      toast.error('Access Denied', {
+        description: 'Only administrators can edit employees.'
+      });
       return;
     }
 
@@ -205,7 +262,9 @@ export default function EmployeesPage() {
 
   const handleDelete = (id: string) => {
     if (currentUserRole !== 'admin') {
-      alert('Access Denied: Only administrators can delete employees.');
+      toast.error('Access Denied', {
+        description: 'Only administrators can delete employees.'
+      });
       return;
     }
 
@@ -214,6 +273,10 @@ export default function EmployeesPage() {
   };
 
   const isAdmin = currentUserRole === 'admin';
+  const isSuperUser = currentUserRole === 'super_user';
+  const canCreate = isAdmin || isSuperUser;
+  const canEdit = isAdmin;
+  const canDelete = isAdmin;
 
   return (
     <DashboardLayout>
@@ -223,18 +286,21 @@ export default function EmployeesPage() {
           <h1 className="text-3xl font-bold text-gray-900">Employees</h1>
           <p className="mt-1 text-sm text-gray-600">
             {isAdmin
-              ? 'Manage employee records'
-              : 'View employee directory'}
+              ? 'Full access: View, Create, Edit, Delete'
+              : isSuperUser
+              ? 'View and Create employees'
+              : 'View-only access'}
           </p>
         </div>
 
         {/* Create Button */}
-        {isAdmin && (
+        {canCreate && (
           <div className="mb-6">
             <button
               onClick={() => {
                 setShowCreateForm(!showCreateForm);
                 setEditingEmployee(null);
+                setMessage(null);
                 setFormData({
                   name: '',
                   email: '',
@@ -251,8 +317,21 @@ export default function EmployeesPage() {
           </div>
         )}
 
+        {/* Message Display */}
+        {message && (
+          <div
+            className={`mb-6 p-4 rounded-lg border ${
+              message.type === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}
+          >
+            {message.text}
+          </div>
+        )}
+
         {/* Form */}
-        {showCreateForm && isAdmin && (
+        {showCreateForm && canCreate && (
           <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
             <h2 className="text-lg font-semibold text-gray-900 mb-4">
               {editingEmployee ? 'Edit Employee' : 'Add New Employee'}
@@ -399,7 +478,7 @@ export default function EmployeesPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Hire Date
                     </th>
-                    {isAdmin && (
+                    {(canEdit || canDelete) && (
                       <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Actions
                       </th>
@@ -442,21 +521,25 @@ export default function EmployeesPage() {
                           {new Date(employee.hireDate).toLocaleDateString()}
                         </div>
                       </td>
-                      {isAdmin && (
+                      {(canEdit || canDelete) && (
                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
-                          <button
-                            onClick={() => handleEdit(employee)}
-                            className="text-blue-600 hover:text-blue-900 transition-colors"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDelete(employee.id)}
-                            disabled={deleteEmployeeMutation.isPending}
-                            className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
-                          >
-                            Delete
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={() => handleEdit(employee)}
+                              className="text-blue-600 hover:text-blue-900 transition-colors"
+                            >
+                              Edit
+                            </button>
+                          )}
+                          {canDelete && (
+                            <button
+                              onClick={() => handleDelete(employee.id)}
+                              disabled={deleteEmployeeMutation.isPending}
+                              className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
+                            >
+                              Delete
+                            </button>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -473,12 +556,18 @@ export default function EmployeesPage() {
           )}
         </div>
 
-        {/* Access Notice for Regular Users */}
+        {/* Access Notice */}
         {!isAdmin && (
-          <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className={`mt-6 border rounded-lg p-4 ${
+            isSuperUser
+              ? 'bg-purple-50 border-purple-200'
+              : 'bg-blue-50 border-blue-200'
+          }`}>
             <div className="flex">
               <svg
-                className="w-5 h-5 text-blue-600 mr-3 flex-shrink-0"
+                className={`w-5 h-5 mr-3 flex-shrink-0 ${
+                  isSuperUser ? 'text-purple-600' : 'text-blue-600'
+                }`}
                 fill="currentColor"
                 viewBox="0 0 20 20"
               >
@@ -489,13 +578,17 @@ export default function EmployeesPage() {
                 />
               </svg>
               <div>
-                <h3 className="text-sm font-medium text-blue-900">
-                  View-Only Access
+                <h3 className={`text-sm font-medium ${
+                  isSuperUser ? 'text-purple-900' : 'text-blue-900'
+                }`}>
+                  {isSuperUser ? 'Super User Access' : 'View-Only Access'}
                 </h3>
-                <p className="mt-1 text-sm text-blue-700">
-                  You are viewing this page in read-only mode. Administrative
-                  privileges are required to create, edit, or delete employee
-                  records.
+                <p className={`mt-1 text-sm ${
+                  isSuperUser ? 'text-purple-700' : 'text-blue-700'
+                }`}>
+                  {isSuperUser
+                    ? 'You can view and create employee records. Edit and delete operations require administrator privileges.'
+                    : 'You are viewing this page in read-only mode. Super User or Administrator privileges are required to create, edit, or delete employee records.'}
                 </p>
               </div>
             </div>

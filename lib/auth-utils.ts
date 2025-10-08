@@ -17,14 +17,27 @@ export async function requireAuth(): Promise<AuthSession> {
   return sessionResponse;
 }
 
-export async function requireRole(role: 'admin' | 'user') {
-  const session = await requireAuth();
+export type UserRole = 'user' | 'super_user' | 'admin';
 
-  if (session.user.role !== role && session.user.role !== 'admin') {
-    throw new Error('Forbidden');
+export async function requireRole(allowedRoles: UserRole[]) {
+  const session = await requireAuth();
+  const userRole = session.user.role as UserRole;
+
+  if (!allowedRoles.includes(userRole)) {
+    throw new Error(`Access Denied: Required role(s): ${allowedRoles.join(', ')}`);
   }
 
   return session;
+}
+
+export function hasPermission(userRole: UserRole, action: 'view' | 'create' | 'edit' | 'delete'): boolean {
+  const permissions = {
+    admin: ['view', 'create', 'edit', 'delete'],
+    super_user: ['view', 'create'],
+    user: ['view'],
+  };
+
+  return permissions[userRole]?.includes(action) || false;
 }
 
 export async function requireEmailVerified() {

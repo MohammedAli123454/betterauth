@@ -71,10 +71,16 @@ export default function Sidebar({ currentUser }: SidebarProps) {
             className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
               currentUser.role === 'admin'
                 ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                : currentUser.role === 'super_user'
+                ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
                 : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
             }`}
           >
-            {currentUser.role === 'admin' ? '👑 Admin' : '👤 User'}
+            {currentUser.role === 'admin'
+              ? '👑 Admin'
+              : currentUser.role === 'super_user'
+              ? '⭐ Super User'
+              : '👤 User'}
           </span>
         </div>
       </div>

@@ -21,6 +21,8 @@ export default function Dashboard() {
       // Redirect based on role
       if (user.role === 'admin') {
         router.push('/admin');
+      } else if (user.role === 'super_user') {
+        router.push('/employees');
       } else {
         router.push('/employees');
       }

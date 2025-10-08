@@ -14,19 +14,6 @@ export const auth = betterAuth({
     requireEmailVerification: false,
     minPasswordLength: 8,
   },
-  // OAuth Providers
-  socialProviders: {
-    google: {
-      clientId: process.env.GOOGLE_CLIENT_ID || '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-      disableSignUp: true,
-    },
-    github: {
-      clientId: process.env.GITHUB_CLIENT_ID || '',
-      clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
-      disableSignUp: true,
-    },
-  },
   user: {
     additionalFields: {
       role: createFieldAttribute('string', {
