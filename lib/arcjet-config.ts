@@ -54,7 +54,7 @@ export const emailSettings = {
 // Authentication: Login/Signup attempts
 export const authRateLimitSettings = {
   mode: 'LIVE',
-  max: 2, // 2 attempts per 10 minutes
+  max: 5, // 2 attempts per 10 minutes
   interval: '10m',
 } satisfies SlidingWindowRateLimitOptions<[]>;
 

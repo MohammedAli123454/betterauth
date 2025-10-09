@@ -23,11 +23,10 @@ export default function UnauthorizedPage() {
   const handleGoToDashboard = () => {
     if (userRole === 'admin') {
       router.push('/admin');
-    } else if (userRole === 'super_user' || userRole === 'user') {
-      router.push('/employees');
-    } else {
-      router.push('/dashboard');
+      return;
     }
+
+    router.push('/employees');
   };
 
   return (
@@ -58,7 +57,7 @@ export default function UnauthorizedPage() {
 
           {/* Description */}
           <p className="text-gray-600 mb-2">
-            You don't have permission to access this page.
+            You don&apos;t have permission to access this page.
           </p>
 
           {from && (

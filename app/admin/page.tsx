@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { authClient } from '@/lib/auth-client';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import DashboardLayout from '@/components/DashboardLayout';
 import { toast } from 'sonner';
+import DashboardLayout from '@/components/DashboardLayout';
+import { authClient } from '@/lib/auth-client';
+import { useCurrentUser } from '@/components/CurrentUserProvider';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 type User = {
   id: string;
@@ -14,11 +16,14 @@ type User = {
   emailVerified: boolean;
 };
 
-export default function AdminPage() {
+function AdminPageContent() {
+  const currentUser = useCurrentUser();
+  const currentUserRole = currentUser?.role ?? 'user';
+  const isAdmin = currentUserRole === 'admin';
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
-  const [currentUserRole, setCurrentUserRole] = useState<string>('');
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [formData, setFormData] = useState({
     email: '',
     name: '',
@@ -30,35 +35,37 @@ export default function AdminPage() {
     name: '',
     email: '',
   });
-  const queryClient = useQueryClient();
+const queryClient = useQueryClient();
 
-  useEffect(() => {
-    const getUser = async () => {
-      const session = await authClient.getSession();
-      if (session?.data?.user?.role) {
-        setCurrentUserRole(session.data.user.role);
-      }
-    };
-    getUser();
-  }, []);
-
-  const { data: usersData, isLoading } = useQuery({
+  const { data: usersData, isLoading, error: usersError } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
-      const result = await authClient.admin.listUsers({
-        query: {
-          limit: 100,
-          offset: 0,
-        },
-      });
-      return result.data?.users as User[] || [];
+      const response = await fetch('/api/admin');
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to fetch users');
+      }
+
+      return (result.users ?? []) as User[];
     },
+    enabled: isAdmin,
+    staleTime: 30 * 1000, // Cache for 30 seconds
+    refetchOnWindowFocus: false, // Don't refetch on window focus
   });
+
+  useEffect(() => {
+    if (usersError instanceof Error) {
+      toast.error('Failed to load users', {
+        description: usersError.message,
+      });
+    }
+  }, [usersError]);
 
   const createUserMutation = useMutation({
     mutationFn: async (userData: typeof formData) => {
       // Validate user role
-      if (currentUserRole !== 'admin') {
+      if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can create users.');
       }
 
@@ -114,7 +121,7 @@ export default function AdminPage() {
   const updateUserMutation = useMutation({
     mutationFn: async ({ userId, updates }: { userId: string; updates: Partial<User> }) => {
       // Validate user role
-      if (currentUserRole !== 'admin') {
+      if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can update users.');
       }
 
@@ -157,7 +164,7 @@ export default function AdminPage() {
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: string) => {
       // Validate user role
-      if (currentUserRole !== 'admin') {
+      if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can delete users.');
       }
 
@@ -208,9 +215,15 @@ export default function AdminPage() {
     createUserMutation.mutate(formData);
   };
 
-  const handleDeleteUser = (userId: string) => {
-    if (!confirm('Are you sure you want to delete this user?')) return;
-    deleteUserMutation.mutate(userId);
+  const handleDeleteUser = (user: User) => {
+    setUserToDelete(user);
+  };
+
+  const confirmDeleteUser = () => {
+    if (userToDelete) {
+      deleteUserMutation.mutate(userToDelete.id);
+      setUserToDelete(null);
+    }
   };
 
   const handleUpdateRole = (userId: string, newRole: string) => {
@@ -240,8 +253,7 @@ export default function AdminPage() {
   };
 
   return (
-    <DashboardLayout requiredRole="admin">
-      <div className="p-8">
+    <div className="p-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
@@ -453,7 +465,7 @@ export default function AdminPage() {
                           Edit
                         </button>
                         <button
-                          onClick={() => handleDeleteUser(user.id)}
+                          onClick={() => handleDeleteUser(user)}
                           disabled={deleteUserMutation.isPending}
                           className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
                         >
@@ -555,7 +567,26 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* Delete User Confirmation Dialog */}
+        <ConfirmDialog
+          open={!!userToDelete}
+          onOpenChange={(open) => !open && setUserToDelete(null)}
+          onConfirm={confirmDeleteUser}
+          title="Delete User"
+          description={`Are you sure you want to delete ${userToDelete?.name || userToDelete?.email}? This action cannot be undone and will remove all associated data.`}
+          confirmText="Delete User"
+          cancelText="Cancel"
+          variant="destructive"
+        />
       </div>
+  );
+}
+
+export default function AdminPage() {
+  return (
+    <DashboardLayout requiredRole="admin">
+      <AdminPageContent />
     </DashboardLayout>
   );
 }

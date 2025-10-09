@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { authClient } from '@/lib/auth-client';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import DashboardLayout from '@/components/DashboardLayout';
 import { toast } from 'sonner';
+import DashboardLayout from '@/components/DashboardLayout';
+import { useCurrentUser } from '@/components/CurrentUserProvider';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 type Employee = {
   id: string;
@@ -16,11 +17,18 @@ type Employee = {
   hireDate: string;
 };
 
-export default function EmployeesPage() {
+function EmployeesPageContent() {
+  const currentUser = useCurrentUser();
+  const currentUserRole = currentUser?.role ?? 'user';
+  const isAdmin = currentUserRole === 'admin';
+  const isSuperUser = currentUserRole === 'super_user';
+  const canCreate = isAdmin || isSuperUser;
+  const canEdit = isAdmin;
+  const canDelete = isAdmin;
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
-  const [currentUserRole, setCurrentUserRole] = useState<string>('');
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+  const [employeeToDelete, setEmployeeToDelete] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -30,16 +38,6 @@ export default function EmployeesPage() {
     hireDate: '',
   });
   const queryClient = useQueryClient();
-
-  useEffect(() => {
-    const getUser = async () => {
-      const session = await authClient.getSession();
-      if (session?.data?.user?.role) {
-        setCurrentUserRole(session.data.user.role);
-      }
-    };
-    getUser();
-  }, []);
 
   const { data: employees, isLoading } = useQuery({
     queryKey: ['employees'],
@@ -51,11 +49,18 @@ export default function EmployeesPage() {
         throw new Error(result.error || 'Failed to fetch employees');
       }
 
-      return result.data.map((emp: any) => ({
-        ...emp,
-        salary: parseFloat(emp.salary),
+      return (result.data as Array<Partial<Employee>>).map((emp) => ({
+        id: String(emp.id),
+        name: String(emp.name ?? ''),
+        email: String(emp.email ?? ''),
+        position: String(emp.position ?? ''),
+        department: String(emp.department ?? ''),
+        salary: typeof emp.salary === 'number' ? emp.salary : parseFloat(String(emp.salary ?? 0)),
+        hireDate: String(emp.hireDate ?? ''),
       }));
     },
+    staleTime: 30 * 1000, // Cache for 30 seconds
+    refetchOnWindowFocus: false, // Don't refetch on window focus
   });
 
   const createEmployeeMutation = useMutation({
@@ -260,7 +265,7 @@ export default function EmployeesPage() {
     setShowCreateForm(true);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = (employee: Employee) => {
     if (currentUserRole !== 'admin') {
       toast.error('Access Denied', {
         description: 'Only administrators can delete employees.'
@@ -268,19 +273,18 @@ export default function EmployeesPage() {
       return;
     }
 
-    if (!confirm('Are you sure you want to delete this employee?')) return;
-    deleteEmployeeMutation.mutate(id);
+    setEmployeeToDelete(employee);
   };
 
-  const isAdmin = currentUserRole === 'admin';
-  const isSuperUser = currentUserRole === 'super_user';
-  const canCreate = isAdmin || isSuperUser;
-  const canEdit = isAdmin;
-  const canDelete = isAdmin;
+  const confirmDelete = () => {
+    if (employeeToDelete) {
+      deleteEmployeeMutation.mutate(employeeToDelete.id);
+      setEmployeeToDelete(null);
+    }
+  };
 
   return (
-    <DashboardLayout>
-      <div className="p-8">
+    <div className="p-8">
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900">Employees</h1>
@@ -533,7 +537,7 @@ export default function EmployeesPage() {
                           )}
                           {canDelete && (
                             <button
-                              onClick={() => handleDelete(employee.id)}
+                              onClick={() => handleDelete(employee)}
                               disabled={deleteEmployeeMutation.isPending}
                               className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
                             >
@@ -594,7 +598,26 @@ export default function EmployeesPage() {
             </div>
           </div>
         )}
+
+        {/* Delete Confirmation Dialog */}
+        <ConfirmDialog
+          open={!!employeeToDelete}
+          onOpenChange={(open) => !open && setEmployeeToDelete(null)}
+          onConfirm={confirmDelete}
+          title="Delete Employee"
+          description={`Are you sure you want to delete ${employeeToDelete?.name}? This action cannot be undone.`}
+          confirmText="Delete"
+          cancelText="Cancel"
+          variant="destructive"
+        />
       </div>
+  );
+}
+
+export default function EmployeesPage() {
+  return (
+    <DashboardLayout>
+      <EmployeesPageContent />
     </DashboardLayout>
   );
 }

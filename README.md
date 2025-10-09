@@ -88,7 +88,8 @@ betterauth/
 ## Available Routes
 
 - `/signin` - Sign in page
-- `/dashboard` - Protected dashboard (requires authentication)
+- `/admin` - Admin-only user management
+- `/employees` - Employee directory (role-gated access)
 - `/api/auth/*` - Authentication API endpoints
 
 ## Database Schema

@@ -1,50 +1,71 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery } from '@tanstack/react-query';
 import { authClient } from '@/lib/auth-client';
 import Sidebar from './Sidebar';
+import { CurrentUserProvider } from './CurrentUserProvider';
 
 type DashboardLayoutProps = {
   children: React.ReactNode;
   requiredRole?: 'admin' | 'super_user' | 'user';
 };
 
+type SessionUser = {
+  id: string;
+  email: string;
+  role: string;
+  name: string | null;
+  image?: string | null;
+};
+
 export default function DashboardLayout({
   children,
   requiredRole,
 }: DashboardLayoutProps) {
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-  const [accessDenied, setAccessDenied] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    const checkAuth = async () => {
+  const {
+    data: sessionUser,
+    isLoading,
+    isError,
+  } = useQuery({
+    queryKey: ['session', 'current-user'],
+    queryFn: async (): Promise<SessionUser | null> => {
       const session = await authClient.getSession();
 
       if (!session?.data?.user) {
-        router.push('/login');
-        return;
+        return null;
       }
 
-      const user = session.data.user;
+      const rawUser = session.data.user as {
+        id: string;
+        email: string;
+        role?: string | null;
+        name?: string | null;
+        image?: string | null;
+      };
 
-      // Check if user has required role
-      if (requiredRole === 'admin' && user.role !== 'admin') {
-        setAccessDenied(true);
-        setLoading(false);
-        return;
-      }
+      return {
+        id: rawUser.id,
+        email: rawUser.email,
+        role: rawUser.role ?? 'user',
+        name: rawUser.name ?? null,
+        image: rawUser.image ?? null,
+      };
+    },
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
 
-      setCurrentUser(user);
-      setLoading(false);
-    };
+  useEffect(() => {
+    if (!isLoading && !sessionUser && !isError) {
+      router.replace('/login');
+    }
+  }, [isLoading, sessionUser, router, isError]);
 
-    checkAuth();
-  }, [router, requiredRole]);
-
-  if (loading) {
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
@@ -55,7 +76,14 @@ export default function DashboardLayout({
     );
   }
 
-  if (accessDenied) {
+  if (!sessionUser) {
+    return null;
+  }
+
+  const isAccessDenied =
+    requiredRole === 'admin' && sessionUser.role !== 'admin';
+
+  if (isAccessDenied) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="max-w-md w-full bg-white rounded-lg shadow-lg p-8 text-center">
@@ -82,24 +110,22 @@ export default function DashboardLayout({
             Administrator privileges are required.
           </p>
           <button
-            onClick={() => router.push('/dashboard')}
+            onClick={() => router.replace('/employees')}
             className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
           >
-            Go to Dashboard
+            Go to Employees
           </button>
         </div>
       </div>
     );
   }
 
-  if (!currentUser) {
-    return null;
-  }
-
   return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar currentUser={currentUser} />
-      <main className="flex-1 overflow-y-auto">{children}</main>
-    </div>
+    <CurrentUserProvider user={sessionUser}>
+      <div className="flex h-screen bg-gray-50">
+        <Sidebar currentUser={sessionUser} />
+        <main className="flex-1 overflow-y-auto">{children}</main>
+      </div>
+    </CurrentUserProvider>
   );
 }

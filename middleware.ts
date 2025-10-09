@@ -6,7 +6,6 @@ import { auth } from '@/lib/auth';
 const routePermissions: Record<string, string[]> = {
   '/admin': ['admin'],
   '/employees': ['admin', 'super_user', 'user'],
-  '/dashboard': ['admin', 'super_user', 'user'],
 };
 
 // Public routes that don't require authentication

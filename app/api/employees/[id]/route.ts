@@ -13,7 +13,7 @@ const aj = arcjet({
   characteristics: ['userIdOrIp'],
   rules: [
     shield({ mode: 'LIVE' }),
-    detectBot({ mode: 'LIVE' }),
+    detectBot({ mode: 'LIVE', allow: [] }),
     slidingWindow({
       mode: 'LIVE',
       max: 100,
