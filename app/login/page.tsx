@@ -6,6 +6,7 @@ import { authClient } from '@/lib/auth-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { checkIsFirstUser } from '@/app/actions/check-first-user';
 import { createFirstAdmin } from '@/app/actions/create-first-admin';
+import { BarLoader } from 'react-spinners';
 
 type UserRole = 'admin' | 'super_user' | 'user' | string;
 
@@ -173,9 +174,10 @@ export default function LoginPage() {
           textAlign: 'center',
         }}
       >
-        <p style={{ fontSize: '14px', color: '#888' }}>
+        <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px' }}>
           Checking for existing administrator…
         </p>
+        <BarLoader color="#0070f3" width="100%" />
       </div>
     );
   }
@@ -314,6 +316,11 @@ export default function LoginPage() {
             ? 'Create Admin Account'
             : 'Sign In'}
         </button>
+        {isSubmitting && (
+          <div style={{ marginTop: '16px' }}>
+            <BarLoader color="#0070f3" width="100%" />
+          </div>
+        )}
       </form>
     </div>
   );
