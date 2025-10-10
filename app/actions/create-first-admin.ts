@@ -1,11 +1,19 @@
 'use server';
 
+import { z } from 'zod';
 import { db } from '@/db';
 import { user } from '@/db/schema';
 import { eq } from 'drizzle-orm';
 import { authClient } from '@/lib/auth-client';
 import { createAuditLog } from './audit-log';
 import { headers } from 'next/headers';
+
+const createFirstAdminSchema = z.object({
+  email: z.string().email('Invalid email address'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+  name: z.string().min(1, 'Name is required'),
+  bootstrapToken: z.string().optional(),
+});
 
 /**
  * Create the first admin user using Better Auth
@@ -19,6 +27,14 @@ export async function createFirstAdmin(data: {
   bootstrapToken?: string;
 }): Promise<{ success: boolean; error?: string; userId?: string }> {
   try {
+    // Validate input data with Zod
+    const validationResult = createFirstAdminSchema.safeParse(data);
+
+    if (!validationResult.success) {
+      const errors = validationResult.error.issues.map((issue) => issue.message).join(', ');
+      return { success: false, error: errors };
+    }
+
     // Double-check that no users exist
     const existingUsers = await db.select().from(user).limit(1);
 

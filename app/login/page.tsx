@@ -1,49 +1,50 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { z } from 'zod';
 import { authClient } from '@/lib/auth-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { checkIsFirstUser } from '@/app/actions/check-first-user';
-import { createFirstAdmin } from '@/app/actions/create-first-admin';
 import { BarLoader } from 'react-spinners';
 
 type UserRole = 'admin' | 'super_user' | 'user' | string;
 
+const loginSchema = z.object({
+  email: z.string().email('Please enter a valid email address'),
+  password: z.string().min(1, 'Password is required'),
+});
+
+type LoginFormData = z.infer<typeof loginSchema>;
+
 export default function LoginPage() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [bootstrapToken, setBootstrapToken] = useState('');
   const [message, setMessage] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isFirstUser, setIsFirstUser] = useState<boolean | null>(null);
-  const [requiresToken, setRequiresToken] = useState(false);
-  const [isCheckingFirstUser, setIsCheckingFirstUser] = useState(true);
+  const [showPassword, setShowPassword] = useState(false);
   const router = useRouter();
   const queryClient = useQueryClient();
 
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormData>({
+    resolver: zodResolver(loginSchema),
+  });
+
+  // Check if this is first user, redirect to setup if so
   useEffect(() => {
     let active = true;
 
     const checkFirstUser = async () => {
       try {
-        // Use server action with NO caching - always fresh check
         const result = await checkIsFirstUser();
-        if (active) {
-          setIsFirstUser(result.isEmpty);
-          setRequiresToken(result.requiresToken);
+        if (active && result.isEmpty) {
+          router.replace('/setup');
         }
       } catch (error) {
         console.error('Error checking first user:', error);
-        if (active) {
-          setIsFirstUser(false);
-          setRequiresToken(false);
-        }
-      } finally {
-        if (active) {
-          setIsCheckingFirstUser(false);
-        }
       }
     };
 
@@ -52,7 +53,7 @@ export default function LoginPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [router]);
 
   const redirectToRole = (role: UserRole) => {
     switch (role) {
@@ -67,27 +68,8 @@ export default function LoginPage() {
     }
   };
 
-  const resolveSessionAndRedirect = async () => {
-    // CRITICAL: Clear all cached data on login to prevent stale session data
-    queryClient.clear();
-
-    // Fetch fresh session
-    const sessionResult = await authClient.getSession();
-    const sessionUser = sessionResult.data?.user;
-
-    if (!sessionUser) {
-      setMessage('Unable to determine user session after authentication.');
-      setIsSubmitting(false);
-      return;
-    }
-
-    redirectToRole(sessionUser.role as UserRole);
-  };
-
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onSubmit = async (data: LoginFormData) => {
     setMessage('');
-    setIsSubmitting(true);
 
     try {
       const response = await fetch('/api/auth/sign-in/email', {
@@ -95,233 +77,97 @@ export default function LoginPage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify(data),
       });
 
-      const data = await response.json();
+      const result = await response.json();
 
-      if (!response.ok || data?.error) {
-        setMessage(data?.error || 'Sign in failed');
-        setIsSubmitting(false);
+      if (!response.ok || result?.error) {
+        setMessage(result?.error || 'Sign in failed');
         return;
       }
 
-      await resolveSessionAndRedirect();
+      // Clear cache and fetch fresh session
+      queryClient.clear();
+      const sessionResult = await authClient.getSession();
+      const sessionUser = sessionResult.data?.user;
+
+      if (!sessionUser) {
+        setMessage('Unable to determine user session after authentication.');
+        return;
+      }
+
+      redirectToRole(sessionUser.role as UserRole);
     } catch (error) {
       console.error('Sign in error:', error);
       setMessage('Sign in failed');
-      setIsSubmitting(false);
     }
   };
-
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage('');
-    setIsSubmitting(true);
-
-    try {
-      // Use server action to create first admin with Better Auth
-      const result = await createFirstAdmin({
-        email,
-        password,
-        name,
-        bootstrapToken: requiresToken ? bootstrapToken : undefined,
-      });
-
-      if (!result.success) {
-        setMessage(result.error || 'Sign up failed');
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Now sign in with Better Auth to get session
-      await authClient.signIn.email({
-        email,
-        password,
-      });
-
-      await resolveSessionAndRedirect();
-    } catch (error) {
-      console.error('Sign up error:', error);
-      setMessage('Sign up failed');
-      setIsSubmitting(false);
-    }
-  };
-
-  const formHeading = useMemo(
-    () => (isFirstUser ? 'Create First Admin' : 'Welcome Back'),
-    [isFirstUser]
-  );
-
-  const formSubheading = useMemo(
-    () =>
-      isFirstUser
-        ? 'Create the first admin account'
-        : 'Sign in with your credentials',
-    [isFirstUser]
-  );
-
-  // Don't render the form until we know if this is first user or not
-  if (isCheckingFirstUser) {
-    return (
-      <div
-        style={{
-          maxWidth: '400px',
-          margin: '100px auto',
-          padding: '20px',
-          border: '1px solid #ddd',
-          borderRadius: '8px',
-          textAlign: 'center',
-        }}
-      >
-        <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px' }}>
-          Checking for existing administrator…
-        </p>
-        <BarLoader color="#0070f3" width="100%" />
-      </div>
-    );
-  }
 
   return (
-    <div
-      style={{
-        maxWidth: '400px',
-        margin: '100px auto',
-        padding: '20px',
-        border: '1px solid #ddd',
-        borderRadius: '8px',
-      }}
-    >
-      <h1 style={{ marginBottom: '10px' }}>{formHeading}</h1>
-      <p style={{ color: '#666', marginBottom: '20px' }}>{formSubheading}</p>
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-5">
+      <div className="w-full max-w-[440px] p-8 bg-white rounded-xl shadow-sm">
+        <h1 className="mb-2 text-2xl font-semibold text-gray-900">Welcome Back</h1>
+        <p className="mb-6 text-sm text-gray-600">Sign in to your account</p>
 
-      {message && (
-        <div
-          style={{
-            padding: '10px',
-            marginBottom: '10px',
-            backgroundColor: message.includes('created')
-              ? '#d4edda'
-              : '#f8d7da',
-            border: `1px solid ${
-              message.includes('created') ? '#c3e6cb' : '#f5c6cb'
-            }`,
-            borderRadius: '4px',
-            color: message.includes('created') ? '#155724' : '#721c24',
-          }}
-        >
-          {message}
-        </div>
-      )}
-
-      <form
-        onSubmit={isFirstUser ? handleSignUp : handleSignIn}
-        style={{ opacity: isSubmitting ? 0.8 : 1, transition: 'opacity 0.2s' }}
-      >
-        {isFirstUser && (
-          <>
-            <input
-              type="text"
-              placeholder="Name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              style={{
-                width: '100%',
-                padding: '8px',
-                marginBottom: '10px',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-              }}
-              required
-            />
-            {requiresToken && (
-              <>
-                <input
-                  type="text"
-                  placeholder="Bootstrap Token"
-                  value={bootstrapToken}
-                  onChange={(e) => setBootstrapToken(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '8px',
-                    marginBottom: '10px',
-                    border: '1px solid #ddd',
-                    borderRadius: '4px',
-                    fontFamily: 'monospace',
-                  }}
-                  required
-                />
-                <p style={{
-                  fontSize: '12px',
-                  color: '#666',
-                  marginTop: '-8px',
-                  marginBottom: '10px',
-                }}>
-                  Enter the bootstrap token from your .env.local file
-                </p>
-              </>
-            )}
-          </>
-        )}
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '8px',
-            marginBottom: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-          }}
-          autoComplete="email"
-          required
-        />
-        <input
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '8px',
-            marginBottom: '10px',
-            border: '1px solid #ddd',
-            borderRadius: '4px',
-          }}
-          autoComplete={isFirstUser ? 'new-password' : 'current-password'}
-          required
-        />
-        <button
-          type="submit"
-          style={{
-            width: '100%',
-            padding: '10px',
-            backgroundColor: isSubmitting ? '#999' : '#0070f3',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isSubmitting ? 'not-allowed' : 'pointer',
-            fontSize: '16px',
-            transition: 'background-color 0.2s ease-in-out',
-          }}
-          disabled={isSubmitting}
-        >
-          {isSubmitting
-            ? isFirstUser
-              ? 'Creating...'
-              : 'Signing in...'
-            : isFirstUser
-            ? 'Create Admin Account'
-            : 'Sign In'}
-        </button>
-        {isSubmitting && (
-          <div style={{ marginTop: '16px' }}>
-            <BarLoader color="#0070f3" width="100%" />
+        {message && (
+          <div className="p-3 mb-4 bg-red-50 border border-red-200 rounded-md text-red-800 text-sm">
+            {message}
           </div>
         )}
-      </form>
+
+        <form onSubmit={handleSubmit(onSubmit)} className={`transition-opacity ${isSubmitting ? 'opacity-80' : 'opacity-100'}`}>
+          <div className="mb-3">
+            <input
+              type="email"
+              placeholder="Email"
+              {...register('email')}
+              className={`w-full px-3 py-2.5 border rounded-md text-sm outline-none transition-colors ${
+                errors.email ? 'border-red-300 focus:border-red-500' : 'border-gray-200 focus:border-blue-600'
+              }`}
+              autoComplete="email"
+            />
+            {errors.email && <p className="mt-1 text-xs text-red-600">{errors.email.message}</p>}
+          </div>
+
+          <div className="mb-3">
+            <div className="relative">
+              <input
+                type={showPassword ? 'text' : 'password'}
+                placeholder="Password"
+                {...register('password')}
+                className={`w-full px-3 py-2.5 pr-10 border rounded-md text-sm outline-none transition-colors ${
+                  errors.password ? 'border-red-300 focus:border-red-500' : 'border-gray-200 focus:border-blue-600'
+                }`}
+                autoComplete="current-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-600 hover:text-gray-800"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? '👁️' : '👁️‍🗨️'}
+              </button>
+            </div>
+            {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password.message}</p>}
+          </div>
+
+          <button
+            type="submit"
+            className="w-full px-4 py-3 mt-1 bg-blue-600 text-white rounded-md text-sm font-medium transition-colors hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            disabled={isSubmitting}
+          >
+            {isSubmitting ? 'Signing in...' : 'Sign In'}
+          </button>
+
+          {isSubmitting && (
+            <div className="mt-4">
+              <BarLoader color="#0070f3" width="100%" />
+            </div>
+          )}
+        </form>
+      </div>
     </div>
   );
 }

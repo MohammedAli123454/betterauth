@@ -1,20 +1,25 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import DashboardLayout from '@/components/DashboardLayout';
 import { authClient } from '@/lib/auth-client';
 import { useCurrentUser } from '@/components/CurrentUserProvider';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-
-type User = {
-  id: string;
-  email: string;
-  name: string | null;
-  role: string;
-  emailVerified: boolean;
-};
+import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
+import { RoleChangeDialog } from '@/components/admin/RoleChangeDialog';
+import { UsersTable } from '@/components/admin/UsersTable';
+import { X } from 'lucide-react';
+import {
+  User,
+  createUserSchema,
+  editUserSchema,
+  CreateUserFormData,
+  EditUserFormData,
+} from '@/types/admin';
 
 function AdminPageContent() {
   const currentUser = useCurrentUser();
@@ -24,18 +29,45 @@ function AdminPageContent() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [showEditModal, setShowEditModal] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
-  const [formData, setFormData] = useState({
-    email: '',
-    name: '',
-    password: '',
-    confirmPassword: '',
-    role: 'user',
+  const [userToResetPassword, setUserToResetPassword] = useState<User | null>(null);
+  const [pendingSaves, setPendingSaves] = useState<Set<string>>(new Set());
+  const [roleChangeDialog, setRoleChangeDialog] = useState<{
+    user: User;
+    newRole: string;
+  } | null>(null);
+  const queryClient = useQueryClient();
+
+  // React Hook Form for create user
+  const {
+    register: registerCreate,
+    handleSubmit: handleSubmitCreate,
+    formState: { errors: createErrors, isSubmitting: isCreating },
+    reset: resetCreate,
+  } = useForm<CreateUserFormData>({
+    resolver: zodResolver(createUserSchema),
+    defaultValues: {
+      name: '',
+      email: '',
+      password: '',
+      confirmPassword: '',
+      role: 'user',
+    },
   });
-  const [editFormData, setEditFormData] = useState({
-    name: '',
-    email: '',
+
+  // React Hook Form for edit user
+  const {
+    register: registerEdit,
+    handleSubmit: handleSubmitEdit,
+    formState: { errors: editErrors, isSubmitting: isEditing },
+    reset: resetEdit,
+    setValue: setEditValue,
+  } = useForm<EditUserFormData>({
+    resolver: zodResolver(editUserSchema),
+    defaultValues: {
+      name: '',
+      email: '',
+    },
   });
-const queryClient = useQueryClient();
 
   const { data: usersData, isLoading, error: usersError } = useQuery({
     queryKey: ['users'],
@@ -50,8 +82,8 @@ const queryClient = useQueryClient();
       return (result.users ?? []) as User[];
     },
     enabled: isAdmin,
-    staleTime: 30 * 1000, // Cache for 30 seconds
-    refetchOnWindowFocus: false, // Don't refetch on window focus
+    staleTime: 30 * 1000,
+    refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
@@ -63,8 +95,7 @@ const queryClient = useQueryClient();
   }, [usersError]);
 
   const createUserMutation = useMutation({
-    mutationFn: async (userData: typeof formData) => {
-      // Validate user role
+    mutationFn: async (userData: CreateUserFormData & { tempId: string }) => {
       if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can create users.');
       }
@@ -83,16 +114,17 @@ const queryClient = useQueryClient();
         throw new Error(result.error.message || 'Failed to create user');
       }
 
-      return result;
+      return { result, tempId: userData.tempId };
     },
     onMutate: async (newUser) => {
       await queryClient.cancelQueries({ queryKey: ['users'] });
       const previousUsers = queryClient.getQueryData(['users']);
 
+      // Add user with temp ID
       queryClient.setQueryData(['users'], (old: User[] = []) => [
         ...old,
         {
-          id: 'temp-' + Date.now(),
+          id: newUser.tempId,
           email: newUser.email,
           name: newUser.name,
           role: newUser.role,
@@ -100,27 +132,65 @@ const queryClient = useQueryClient();
         },
       ]);
 
-      return { previousUsers };
+      return { previousUsers, tempId: newUser.tempId };
     },
     onError: (error, newUser, context) => {
+      // Remove from pending saves
+      if (context?.tempId) {
+        setPendingSaves((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(context.tempId);
+          return newSet;
+        });
+      }
+
+      // Rollback optimistic update
       queryClient.setQueryData(['users'], context?.previousUsers);
+
+      // Update the loading toast to error
       toast.error('Failed to create user', {
-        description: error.message || 'An unexpected error occurred'
+        id: newUser.tempId,
+        description: error.message || 'An unexpected error occurred',
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['users'] });
-      setFormData({ email: '', name: '', password: '', confirmPassword: '', role: 'user' });
-      setShowCreateForm(false);
+    onSuccess: (data, variables, context) => {
+      // Remove from pending saves
+      if (context?.tempId) {
+        setPendingSaves((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(context.tempId);
+          return newSet;
+        });
+      }
+
+      // Replace temp user with real user from server
+      queryClient.setQueryData(['users'], (old: User[] = []) => {
+        const filtered = old.filter((u) => u.id !== context?.tempId);
+        if (data.result.data?.user) {
+          return [
+            ...filtered,
+            {
+              id: data.result.data.user.id,
+              email: data.result.data.user.email,
+              name: data.result.data.user.name,
+              role: data.result.data.user.role as string,
+              emailVerified: data.result.data.user.emailVerified as boolean,
+            },
+          ];
+        }
+        return filtered;
+      });
+
+      // Update the loading toast to success
       toast.success('User created', {
-        description: 'The user has been successfully created.'
+        id: variables.tempId,
+        description: 'The user has been successfully created.',
       });
     },
   });
 
   const updateUserMutation = useMutation({
     mutationFn: async ({ userId, updates }: { userId: string; updates: Partial<User> }) => {
-      // Validate user role
       if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can update users.');
       }
@@ -128,11 +198,9 @@ const queryClient = useQueryClient();
       if (updates.role) {
         await authClient.admin.setRole({
           userId,
-          role: updates.role as "user" | "admin"
+          role: updates.role as 'user' | 'admin',
         });
       }
-      // Note: Better Auth admin plugin doesn't support updating name/email yet
-      // This is a placeholder for when that functionality is available
       return { userId, updates };
     },
     onMutate: async ({ userId, updates }) => {
@@ -145,10 +213,10 @@ const queryClient = useQueryClient();
 
       return { previousUsers };
     },
-    onError: (error, variables, context) => {
+    onError: (error, _variables, context) => {
       queryClient.setQueryData(['users'], context?.previousUsers);
       toast.error('Failed to update user', {
-        description: error.message || 'An unexpected error occurred'
+        description: error.message || 'An unexpected error occurred',
       });
     },
     onSuccess: () => {
@@ -156,14 +224,13 @@ const queryClient = useQueryClient();
       setEditingUser(null);
       setShowEditModal(false);
       toast.success('User updated', {
-        description: 'The user has been successfully updated.'
+        description: 'The user has been successfully updated.',
       });
     },
   });
 
   const deleteUserMutation = useMutation({
     mutationFn: async (userId: string) => {
-      // Validate user role
       if (!isAdmin) {
         throw new Error('Access Denied: Only administrators can delete users.');
       }
@@ -181,38 +248,36 @@ const queryClient = useQueryClient();
 
       return { previousUsers };
     },
-    onError: (error, userId, context) => {
+    onError: (error, _userId, context) => {
       queryClient.setQueryData(['users'], context?.previousUsers);
       toast.error('Failed to delete user', {
-        description: error.message || 'An unexpected error occurred'
+        description: error.message || 'An unexpected error occurred',
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('User deleted', {
-        description: 'The user has been successfully removed.'
+        description: 'The user has been successfully removed.',
       });
     },
   });
 
-  const handleCreateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const onCreateUser = async (data: CreateUserFormData) => {
+    // Generate temp ID for optimistic update
+    const tempId = 'temp-' + Date.now();
 
-    if (formData.password !== formData.confirmPassword) {
-      toast.error('Validation Error', {
-        description: 'Passwords do not match'
-      });
-      return;
-    }
+    // Add to pending saves immediately
+    setPendingSaves((prev) => new Set(prev).add(tempId));
 
-    if (formData.password.length < 8) {
-      toast.error('Validation Error', {
-        description: 'Password must be at least 8 characters'
-      });
-      return;
-    }
+    // Clear form and hide it INSTANTLY
+    resetCreate();
+    setShowCreateForm(false);
 
-    createUserMutation.mutate(formData);
+    // Show "in progress" toast
+    toast.loading('Adding user...', { id: tempId });
+
+    // Trigger mutation with temp ID (happens in background)
+    createUserMutation.mutate({ ...data, tempId });
   };
 
   const handleDeleteUser = (user: User) => {
@@ -226,360 +291,310 @@ const queryClient = useQueryClient();
     }
   };
 
-  const handleUpdateRole = (userId: string, newRole: string) => {
-    updateUserMutation.mutate({ userId, updates: { role: newRole } });
+  const handleRoleClick = (user: User) => {
+    setRoleChangeDialog({ user, newRole: user.role });
+  };
+
+  const confirmRoleChange = async () => {
+    if (roleChangeDialog) {
+      updateUserMutation.mutate(
+        {
+          userId: roleChangeDialog.user.id,
+          updates: { role: roleChangeDialog.newRole },
+        },
+        {
+          onSettled: () => {
+            // Close dialog after mutation completes (success or error)
+            setRoleChangeDialog(null);
+          },
+        }
+      );
+    }
   };
 
   const handleEdit = (user: User) => {
     setEditingUser(user);
-    setEditFormData({
-      name: user.name || '',
-      email: user.email,
-    });
+    setEditValue('name', user.name || '');
+    setEditValue('email', user.email);
     setShowEditModal(true);
   };
 
-  const handleUpdateUser = (e: React.FormEvent) => {
-    e.preventDefault();
+  const onUpdateUser = async (data: EditUserFormData) => {
     if (!editingUser) return;
 
     updateUserMutation.mutate({
       userId: editingUser.id,
       updates: {
-        name: editFormData.name,
-        email: editFormData.email,
+        name: data.name,
+        email: data.email,
       },
+    });
+  };
+
+  const handleResetPassword = (user: User) => {
+    setUserToResetPassword(user);
+  };
+
+  const handlePasswordChanged = () => {
+    toast.success('Password reset successfully', {
+      description: 'The user can now log in with the new password.',
     });
   };
 
   return (
     <div className="p-8">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">User Management</h1>
-          <p className="mt-1 text-sm text-gray-600">
-            Manage users and their roles
-          </p>
-        </div>
-
-        {/* Create User Button */}
+      {/* Create User Button */}
+      {!showCreateForm && (
         <div className="mb-6">
           <button
-            onClick={() => setShowCreateForm(!showCreateForm)}
+            onClick={() => setShowCreateForm(true)}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
           >
-            {showCreateForm ? 'Cancel' : '+ Create New User'}
+            + Create New User
           </button>
         </div>
+      )}
 
-        {/* Create User Form */}
-        {showCreateForm && (
-          <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">
-              Create New User
-            </h2>
-            <form onSubmit={handleCreateUser} className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Name
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Enter name"
-                    value={formData.name}
-                    onChange={(e) =>
-                      setFormData({ ...formData, name: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    placeholder="Enter email"
-                    value={formData.email}
-                    onChange={(e) =>
-                      setFormData({ ...formData, email: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Password
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Enter password (min 8 characters)"
-                    value={formData.password}
-                    onChange={(e) =>
-                      setFormData({ ...formData, password: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                    minLength={8}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Confirm Password
-                  </label>
-                  <input
-                    type="password"
-                    placeholder="Confirm password"
-                    value={formData.confirmPassword}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        confirmPassword: e.target.value,
-                      })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Role
-                  </label>
-                  <select
-                    value={formData.role}
-                    onChange={(e) =>
-                      setFormData({ ...formData, role: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="user">User (View Only)</option>
-                    <option value="super_user">Super User (View + Create)</option>
-                    <option value="admin">Admin (Full Access)</option>
-                  </select>
-                </div>
+      {/* Create User Form */}
+      {showCreateForm && (
+        <div className="mb-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Create New User</h2>
+          <form onSubmit={handleSubmitCreate(onCreateUser)} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  placeholder="Enter name"
+                  {...registerCreate('name')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    createErrors.name ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {createErrors.name && (
+                  <p className="mt-1 text-xs text-red-600">{createErrors.name.message}</p>
+                )}
               </div>
-              <button
-                type="submit"
-                disabled={createUserMutation.isPending}
-                className="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-              >
-                {createUserMutation.isPending ? 'Creating...' : 'Create User'}
-              </button>
-              {createUserMutation.isError && (
-                <p className="text-sm text-red-600 mt-2">
-                  {createUserMutation.error?.message}
-                </p>
-              )}
-            </form>
-          </div>
-        )}
 
-        {/* Users Table */}
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">
-              All Users ({usersData?.length || 0})
-            </h2>
-          </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  placeholder="Enter email"
+                  {...registerCreate('email')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    createErrors.email ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {createErrors.email && (
+                  <p className="mt-1 text-xs text-red-600">{createErrors.email.message}</p>
+                )}
+              </div>
 
-          {isLoading ? (
-            <div className="px-6 py-12 text-center">
-              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-blue-600 mx-auto"></div>
-              <p className="mt-4 text-sm text-gray-600">Loading users...</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Email
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Role
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Verified
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {usersData?.map((user) => (
-                    <tr
-                      key={user.id}
-                      className="hover:bg-gray-50 transition-colors"
-                    >
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          {user.name || 'N/A'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-600">{user.email}</div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <select
-                          value={user.role}
-                          onChange={(e) =>
-                            handleUpdateRole(user.id, e.target.value)
-                          }
-                          disabled={updateUserMutation.isPending}
-                          className={`text-sm rounded-full px-3 py-1 font-medium border ${
-                            user.role === 'admin'
-                              ? 'bg-red-50 text-red-700 border-red-200'
-                              : user.role === 'super_user'
-                              ? 'bg-purple-50 text-purple-700 border-purple-200'
-                              : 'bg-blue-50 text-blue-700 border-blue-200'
-                          } disabled:opacity-50 disabled:cursor-not-allowed`}
-                        >
-                          <option value="user">User</option>
-                          <option value="super_user">Super User</option>
-                          <option value="admin">Admin</option>
-                        </select>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            user.emailVerified
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}
-                        >
-                          {user.emailVerified ? '✓ Verified' : '✗ Unverified'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
-                        <button
-                          onClick={() => handleEdit(user)}
-                          className="text-blue-600 hover:text-blue-900 transition-colors"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteUser(user)}
-                          disabled={deleteUserMutation.isPending}
-                          className="text-red-600 hover:text-red-900 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <input
+                  type="password"
+                  placeholder="Enter password (min 8 characters)"
+                  {...registerCreate('password')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    createErrors.password ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {createErrors.password && (
+                  <p className="mt-1 text-xs text-red-600">{createErrors.password.message}</p>
+                )}
+              </div>
 
-              {(!usersData || usersData.length === 0) && !isLoading && (
-                <div className="px-6 py-12 text-center text-gray-500">
-                  No users found
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Confirm Password
+                </label>
+                <input
+                  type="password"
+                  placeholder="Confirm password"
+                  {...registerCreate('confirmPassword')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    createErrors.confirmPassword ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {createErrors.confirmPassword && (
+                  <p className="mt-1 text-xs text-red-600">{createErrors.confirmPassword.message}</p>
+                )}
+              </div>
 
-        {/* Edit User Modal */}
-        {showEditModal && editingUser && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold text-gray-900">
-                  Edit User
-                </h2>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                <select
+                  {...registerCreate('role')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    createErrors.role ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                >
+                  <option value="user">User (View Only)</option>
+                  <option value="super_user">Super User (View + Create)</option>
+                  <option value="admin">Admin (Full Access)</option>
+                </select>
+                {createErrors.role && (
+                  <p className="mt-1 text-xs text-red-600">{createErrors.role.message}</p>
+                )}
+              </div>
+
+              <div className="flex gap-3 items-end">
                 <button
+                  type="submit"
+                  disabled={isCreating}
+                  className="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isCreating ? 'Creating...' : 'Create User'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateForm(false);
+                    resetCreate();
+                  }}
+                  className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Users Table */}
+      <UsersTable
+        users={usersData}
+        isLoading={isLoading}
+        pendingSaves={pendingSaves}
+        isUpdating={updateUserMutation.isPending}
+        isDeleting={deleteUserMutation.isPending}
+        onRoleClick={handleRoleClick}
+        onEdit={handleEdit}
+        onResetPassword={handleResetPassword}
+        onDelete={handleDeleteUser}
+      />
+
+      {/* Edit User Modal */}
+      {showEditModal && editingUser && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-semibold text-gray-900">Edit User</h2>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingUser(null);
+                  resetEdit();
+                }}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitEdit(onUpdateUser)} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+                <input
+                  type="text"
+                  {...registerEdit('name')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    editErrors.name ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {editErrors.name && (
+                  <p className="mt-1 text-xs text-red-600">{editErrors.name.message}</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  {...registerEdit('email')}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                    editErrors.email ? 'border-red-300' : 'border-gray-300'
+                  }`}
+                />
+                {editErrors.email && (
+                  <p className="mt-1 text-xs text-red-600">{editErrors.email.message}</p>
+                )}
+              </div>
+
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                <p className="text-sm text-yellow-800">
+                  <strong>Note:</strong> Email and name updates are optimistic. Better Auth admin
+                  plugin currently only supports role updates.
+                </p>
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-4">
+                <button
+                  type="button"
                   onClick={() => {
                     setShowEditModal(false);
                     setEditingUser(null);
+                    resetEdit();
                   }}
-                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                 >
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isEditing}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                >
+                  {isEditing ? 'Updating...' : 'Update User'}
                 </button>
               </div>
-
-              <form onSubmit={handleUpdateUser} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Name
-                  </label>
-                  <input
-                    type="text"
-                    value={editFormData.name}
-                    onChange={(e) =>
-                      setEditFormData({ ...editFormData, name: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Email
-                  </label>
-                  <input
-                    type="email"
-                    value={editFormData.email}
-                    onChange={(e) =>
-                      setEditFormData({ ...editFormData, email: e.target.value })
-                    }
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    required
-                  />
-                </div>
-
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                  <p className="text-sm text-yellow-800">
-                    <strong>Note:</strong> Email and name updates are optimistic. Better Auth admin plugin currently only supports role updates.
-                  </p>
-                </div>
-
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowEditModal(false);
-                      setEditingUser(null);
-                    }}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={updateUserMutation.isPending}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                  >
-                    {updateUserMutation.isPending ? 'Updating...' : 'Update User'}
-                  </button>
-                </div>
-              </form>
-            </div>
+            </form>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Delete User Confirmation Dialog */}
-        <ConfirmDialog
-          open={!!userToDelete}
-          onOpenChange={(open) => !open && setUserToDelete(null)}
-          onConfirm={confirmDeleteUser}
-          title="Delete User"
-          description={`Are you sure you want to delete ${userToDelete?.name || userToDelete?.email}? This action cannot be undone and will remove all associated data.`}
-          confirmText="Delete User"
-          cancelText="Cancel"
-          variant="destructive"
+      {/* Delete User Confirmation Dialog */}
+      <ConfirmDialog
+        open={!!userToDelete}
+        onOpenChange={(open) => !open && setUserToDelete(null)}
+        onConfirm={confirmDeleteUser}
+        title="Delete User"
+        description={`Are you sure you want to delete ${
+          userToDelete?.name || userToDelete?.email
+        }? This action cannot be undone and will remove all associated data.`}
+        confirmText="Delete User"
+        cancelText="Cancel"
+        variant="destructive"
+      />
+
+      {/* Change Password Dialog */}
+      {userToResetPassword && (
+        <ChangePasswordDialog
+          open={!!userToResetPassword}
+          onOpenChange={(open) => !open && setUserToResetPassword(null)}
+          userId={userToResetPassword.id}
+          userName={userToResetPassword.name}
+          onPasswordChanged={handlePasswordChanged}
         />
-      </div>
+      )}
+
+      {/* Change Role Dialog */}
+      {roleChangeDialog && (
+        <RoleChangeDialog
+          user={roleChangeDialog.user}
+          newRole={roleChangeDialog.newRole}
+          onNewRoleChange={(newRole) =>
+            setRoleChangeDialog({ ...roleChangeDialog, newRole })
+          }
+          onConfirm={confirmRoleChange}
+          onCancel={() => setRoleChangeDialog(null)}
+          isLoading={updateUserMutation.isPending}
+        />
+      )}
+    </div>
   );
 }
 
