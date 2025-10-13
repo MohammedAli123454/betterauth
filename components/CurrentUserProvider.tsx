@@ -10,7 +10,10 @@ type CurrentUser = {
   image?: string | null;
 };
 
-const CurrentUserContext = createContext<CurrentUser | null>(null);
+const CurrentUserContext = createContext<CurrentUser | undefined>(undefined);
+
+// Add display name for better debugging
+CurrentUserContext.displayName = 'CurrentUserContext';
 
 export function CurrentUserProvider({
   user,
@@ -26,6 +29,18 @@ export function CurrentUserProvider({
   );
 }
 
-export function useCurrentUser(): CurrentUser | null {
-  return useContext(CurrentUserContext);
+/**
+ * Hook to access the current user from context.
+ * @throws {Error} If used outside of CurrentUserProvider
+ */
+export function useCurrentUser(): CurrentUser {
+  const context = useContext(CurrentUserContext);
+
+  if (context === undefined) {
+    throw new Error(
+      'useCurrentUser must be used within a CurrentUserProvider'
+    );
+  }
+
+  return context;
 }

@@ -3,12 +3,11 @@ import { db } from '@/db';
 import { auditLog, user } from '@/db/schema';
 import { requireRole } from '@/lib/auth-utils';
 import { desc, and, eq, gte, lte, like, or } from 'drizzle-orm';
-import { logDataExport } from '@/lib/audit-logger';
 
 // GET /api/audit-logs - List audit logs with filters (admin only)
 export async function GET(request: NextRequest) {
   try {
-    const session = await requireRole(['admin']);
+    await requireRole(['admin']);
 
     const { searchParams } = new URL(request.url);
 

@@ -44,7 +44,9 @@ export const account = pgTable('account', {
   accessToken: text('accessToken'),
   refreshToken: text('refreshToken'),
   idToken: text('idToken'),
-  expiresAt: timestamp('expiresAt', { mode: 'date' }),
+  accessTokenExpiresAt: timestamp('accessTokenExpiresAt', { mode: 'date' }),
+  refreshTokenExpiresAt: timestamp('refreshTokenExpiresAt', { mode: 'date' }),
+  scope: text('scope'),
   password: text('password'),
   createdAt: timestamp('createdAt', { mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().defaultNow(),
@@ -55,6 +57,8 @@ export const verification = pgTable('verification', {
   identifier: text('identifier').notNull(),
   value: text('value').notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
+  createdAt: timestamp('createdAt', { mode: 'date' }).notNull().defaultNow(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().defaultNow(),
 });
 
 export const employee = pgTable('employee', {

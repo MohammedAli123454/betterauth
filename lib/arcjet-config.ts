@@ -54,7 +54,7 @@ export const emailSettings = {
 // Authentication: Login/Signup attempts
 export const authRateLimitSettings = {
   mode: 'LIVE',
-  max: 5, // 2 attempts per 10 minutes
+  max: 10, // 10 attempts per 10 minutes
   interval: '10m',
 } satisfies SlidingWindowRateLimitOptions<[]>;
 
@@ -84,7 +84,7 @@ export const employeeReadRateLimitSettings = {
 // ============================================
 export const arcjetErrorMessages = {
   rateLimit: {
-    auth: 'Rate limit reached. You can only attempt login 2 times per 10 minutes. Please try again later.',
+    auth: 'Rate limit reached. You can only attempt login 10 times per 10 minutes. Please try again later.',
     employeeCreate: 'Rate limit reached. You can only create 2 employees per 10 minutes.',
     employeeRead: 'Too many requests. Please slow down.',
     default: 'Too many requests. Please try again later.',

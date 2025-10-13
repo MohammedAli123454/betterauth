@@ -2,14 +2,25 @@ import { db } from '../db';
 import { user, account } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
+import { promisify } from 'util';
 
-// Better Auth uses bcrypt internally, but we need to use their format
-// This uses Node's built-in crypto for compatibility
+// Hash password using scrypt (same as lib/auth.ts)
 async function hashPassword(password: string): Promise<string> {
-  // Better Auth expects bcrypt hash format
-  // We'll use a simple approach that works with Better Auth
-  const bcrypt = await import('bcrypt');
-  return bcrypt.hash(password, 10);
+  const scryptAsync = promisify(crypto.scrypt);
+
+  // Generate a 32-byte salt
+  const salt = crypto.randomBytes(32);
+
+  // Hash the password with scrypt (64-byte output)
+  const derivedKey = (await scryptAsync(
+    password.normalize('NFKC'),
+    salt,
+    64
+  )) as Buffer;
+
+  // Combine salt + hash and encode as base64
+  const combined = Buffer.concat([salt, derivedKey]);
+  return combined.toString('base64');
 }
 
 async function makeAdmin(email: string) {

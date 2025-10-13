@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
 import DashboardLayout from '@/components/DashboardLayout';
 import { authClient } from '@/lib/auth-client';
 import { useCurrentUser } from '@/components/CurrentUserProvider';
@@ -12,7 +11,8 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { ChangePasswordDialog } from '@/components/ChangePasswordDialog';
 import { RoleChangeDialog } from '@/components/admin/RoleChangeDialog';
 import { UsersTable } from '@/components/admin/UsersTable';
-import { X } from 'lucide-react';
+import { X, Loader2, CheckCircle } from 'lucide-react';
+import { BarLoader } from 'react-spinners';
 import {
   User,
   createUserSchema,
@@ -23,7 +23,7 @@ import {
 
 function AdminPageContent() {
   const currentUser = useCurrentUser();
-  const currentUserRole = currentUser?.role ?? 'user';
+  const currentUserRole = currentUser.role;
   const isAdmin = currentUserRole === 'admin';
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -35,14 +35,18 @@ function AdminPageContent() {
     user: User;
     newRole: string;
   } | null>(null);
+  const [showSuccessMessage, setShowSuccessMessage] = useState(false);
+  const [successUserName, setSuccessUserName] = useState('');
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
   const queryClient = useQueryClient();
 
   // React Hook Form for create user
   const {
     register: registerCreate,
     handleSubmit: handleSubmitCreate,
-    formState: { errors: createErrors, isSubmitting: isCreating },
+    formState: { errors: createErrors },
     reset: resetCreate,
+    setError: setCreateError,
   } = useForm<CreateUserFormData>({
     resolver: zodResolver(createUserSchema),
     defaultValues: {
@@ -72,25 +76,38 @@ function AdminPageContent() {
   const { data: usersData, isLoading, error: usersError } = useQuery({
     queryKey: ['users'],
     queryFn: async () => {
-      const response = await fetch('/api/admin');
-      const result = await response.json();
+      try {
+        const response = await fetch('/api/admin');
 
-      if (!response.ok) {
-        throw new Error(result.error || 'Failed to fetch users');
+        if (!response.ok) {
+          let errorMessage = 'Failed to fetch users';
+          try {
+            const result = await response.json();
+            errorMessage = result.error || errorMessage;
+          } catch {
+            // If JSON parsing fails, use default message
+          }
+          throw new Error(errorMessage);
+        }
+
+        const result = await response.json();
+        return (result.users ?? []) as User[];
+      } catch (error) {
+        console.error('[Users Query Error]:', error);
+        throw error;
       }
-
-      return (result.users ?? []) as User[];
     },
     enabled: isAdmin,
     staleTime: 30 * 1000,
     refetchOnWindowFocus: false,
+    retry: 1,
+    retryDelay: 1000,
   });
 
   useEffect(() => {
     if (usersError instanceof Error) {
-      toast.error('Failed to load users', {
-        description: usersError.message,
-      });
+      // Error will be shown in UI via query state
+      console.error('Failed to load users:', usersError.message);
     }
   }, [usersError]);
 
@@ -100,18 +117,48 @@ function AdminPageContent() {
         throw new Error('Access Denied: Only administrators can create users.');
       }
 
-      const result = await authClient.admin.createUser({
-        email: userData.email,
-        name: userData.name,
-        password: userData.password,
-        data: {
-          role: userData.role,
-          emailVerified: true,
-        },
-      });
+      // Set loading state at the start
+      setIsCreatingUser(true);
+
+      // Add minimum delay to ensure loading state is visible
+      const [result] = await Promise.all([
+        authClient.admin.createUser({
+          email: userData.email,
+          name: userData.name,
+          password: userData.password,
+          data: {
+            role: userData.role,
+            emailVerified: true,
+          },
+        }),
+        new Promise(resolve => setTimeout(resolve, 500)), // Minimum 500ms delay for feedback
+      ]);
+
+      // Log the full result to debug
+      console.log('[Create User Result]', result);
 
       if (result.error) {
-        throw new Error(result.error.message || 'Failed to create user');
+        // Log the error structure to understand it better
+        console.warn('[Create User Error - Full]', result.error);
+        console.warn('[Create User Error - Stringified]', JSON.stringify(result.error, null, 2));
+
+        // Extract meaningful error message from better-auth error response
+        const error = result.error as any;
+        let errorMessage = error.message || 'Failed to create user';
+
+        // Check for status code indicating duplicate
+        if (error.status === 400 || error.statusCode === 400) {
+          errorMessage = 'A user with this email already exists';
+        }
+
+        // Also check message content
+        if (errorMessage.toLowerCase().includes('unique') ||
+            errorMessage.toLowerCase().includes('duplicate') ||
+            errorMessage.toLowerCase().includes('already exists')) {
+          errorMessage = 'A user with this email already exists';
+        }
+
+        throw new Error(errorMessage);
       }
 
       return { result, tempId: userData.tempId };
@@ -134,7 +181,10 @@ function AdminPageContent() {
 
       return { previousUsers, tempId: newUser.tempId };
     },
-    onError: (error, newUser, context) => {
+    onError: (error, _newUser, context) => {
+      // Reset loading state
+      setIsCreatingUser(false);
+
       // Remove from pending saves
       if (context?.tempId) {
         setPendingSaves((prev) => {
@@ -147,13 +197,17 @@ function AdminPageContent() {
       // Rollback optimistic update
       queryClient.setQueryData(['users'], context?.previousUsers);
 
-      // Update the loading toast to error
-      toast.error('Failed to create user', {
-        id: newUser.tempId,
-        description: error.message || 'An unexpected error occurred',
-      });
+      if (error.message?.toLowerCase().includes('already exists')) {
+        setCreateError('email', {
+          type: 'manual',
+          message: 'User already exists with this email. Choose another email.',
+        });
+      }
     },
-    onSuccess: (data, variables, context) => {
+    onSuccess: (data, _variables, context) => {
+      // Reset loading state
+      setIsCreatingUser(false);
+
       // Remove from pending saves
       if (context?.tempId) {
         setPendingSaves((prev) => {
@@ -181,11 +235,17 @@ function AdminPageContent() {
         return filtered;
       });
 
-      // Update the loading toast to success
-      toast.success('User created', {
-        id: variables.tempId,
-        description: 'The user has been successfully created.',
-      });
+      // Show inline success message
+      setSuccessUserName(data.result.data?.user?.name || data.result.data?.user?.email || 'User');
+      setShowSuccessMessage(true);
+
+      // Hide success message after 5 seconds
+      setTimeout(() => {
+        setShowSuccessMessage(false);
+      }, 5000);
+
+      resetCreate();
+      setShowCreateForm(false);
     },
   });
 
@@ -195,12 +255,37 @@ function AdminPageContent() {
         throw new Error('Access Denied: Only administrators can update users.');
       }
 
+      // Handle role updates through better-auth
       if (updates.role) {
         await authClient.admin.setRole({
           userId,
           role: updates.role as 'user' | 'admin',
         });
       }
+
+      // Handle name and email updates through custom API
+      if (updates.name !== undefined || updates.email !== undefined) {
+        const response = await fetch('/api/admin/update-user', {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            name: updates.name,
+            email: updates.email,
+          }),
+        });
+
+        if (!response.ok) {
+          const result = await response.json();
+          throw new Error(result.error || 'Failed to update user');
+        }
+
+        const result = await response.json();
+        return { userId, updates, user: result.user };
+      }
+
       return { userId, updates };
     },
     onMutate: async ({ userId, updates }) => {
@@ -215,17 +300,12 @@ function AdminPageContent() {
     },
     onError: (error, _variables, context) => {
       queryClient.setQueryData(['users'], context?.previousUsers);
-      toast.error('Failed to update user', {
-        description: error.message || 'An unexpected error occurred',
-      });
+      console.error('Failed to update user:', error.message);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       setEditingUser(null);
       setShowEditModal(false);
-      toast.success('User updated', {
-        description: 'The user has been successfully updated.',
-      });
     },
   });
 
@@ -250,15 +330,10 @@ function AdminPageContent() {
     },
     onError: (error, _userId, context) => {
       queryClient.setQueryData(['users'], context?.previousUsers);
-      toast.error('Failed to delete user', {
-        description: error.message || 'An unexpected error occurred',
-      });
+      console.error('Failed to delete user:', error.message);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
-      toast.success('User deleted', {
-        description: 'The user has been successfully removed.',
-      });
     },
   });
 
@@ -268,13 +343,6 @@ function AdminPageContent() {
 
     // Add to pending saves immediately
     setPendingSaves((prev) => new Set(prev).add(tempId));
-
-    // Clear form and hide it INSTANTLY
-    resetCreate();
-    setShowCreateForm(false);
-
-    // Show "in progress" toast
-    toast.loading('Adding user...', { id: tempId });
 
     // Trigger mutation with temp ID (happens in background)
     createUserMutation.mutate({ ...data, tempId });
@@ -336,13 +404,32 @@ function AdminPageContent() {
   };
 
   const handlePasswordChanged = () => {
-    toast.success('Password reset successfully', {
-      description: 'The user can now log in with the new password.',
-    });
+    // Password reset success - no toast needed
   };
 
   return (
     <div className="p-8">
+      {/* Success Message */}
+      {showSuccessMessage && (
+        <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
+          <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1">
+            <h3 className="text-sm font-semibold text-green-900">
+              User Registered Successfully
+            </h3>
+            <p className="text-sm text-green-700 mt-1">
+              {successUserName} has been added to the system and can now log in.
+            </p>
+          </div>
+          <button
+            onClick={() => setShowSuccessMessage(false)}
+            className="text-green-600 hover:text-green-800 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
       {/* Create User Button */}
       {!showCreateForm && (
         <div className="mb-6">
@@ -443,10 +530,11 @@ function AdminPageContent() {
               <div className="flex gap-3 items-end">
                 <button
                   type="submit"
-                  disabled={isCreating}
-                  className="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  disabled={isCreatingUser}
+                  className="px-6 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
                 >
-                  {isCreating ? 'Creating...' : 'Create User'}
+                  {isCreatingUser && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {isCreatingUser ? 'Creating...' : 'Create User'}
                 </button>
                 <button
                   type="button"
@@ -454,12 +542,21 @@ function AdminPageContent() {
                     setShowCreateForm(false);
                     resetCreate();
                   }}
-                  className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  disabled={isCreatingUser}
+                  className="px-6 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
               </div>
             </div>
+
+            {/* Loading Bar */}
+            {isCreatingUser && (
+              <div className="mt-4">
+                <p className="text-sm text-gray-600 mb-2">Creating user account...</p>
+                <BarLoader color="#3B82F6" width="100%" />
+              </div>
+            )}
           </form>
         </div>
       )}
@@ -524,13 +621,6 @@ function AdminPageContent() {
                 )}
               </div>
 
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                <p className="text-sm text-yellow-800">
-                  <strong>Note:</strong> Email and name updates are optimistic. Better Auth admin
-                  plugin currently only supports role updates.
-                </p>
-              </div>
-
               <div className="flex justify-end space-x-3 pt-4">
                 <button
                   type="button"
@@ -545,10 +635,13 @@ function AdminPageContent() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isEditing}
-                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                  disabled={isEditing || updateUserMutation.isPending}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                 >
-                  {isEditing ? 'Updating...' : 'Update User'}
+                  {(isEditing || updateUserMutation.isPending) && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  {(isEditing || updateUserMutation.isPending) ? 'Updating...' : 'Update User'}
                 </button>
               </div>
             </form>

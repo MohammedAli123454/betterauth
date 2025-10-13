@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import { headers } from 'next/headers';
-import { and, eq } from 'drizzle-orm';
-import { hash } from 'bcrypt';
 import { auth } from '@/lib/auth';
-import { db } from '@/db';
-import { account } from '@/db/schema';
 
 export async function POST(request: Request) {
   try {
@@ -44,29 +40,22 @@ export async function POST(request: Request) {
       );
     }
 
-    // Hash the new password
-    const hashedPassword = await hash(newPassword, 10);
+    // Use Better Auth's server-side admin API to set password
+    // This will use Better Auth's default hashing
+    // IMPORTANT: setUserPassword requires session cookies in headers
+    const result = await auth.api.setUserPassword({
+      body: {
+        userId,
+        newPassword,
+      },
+      headers: await headers(),
+    });
 
-    // Update the password only for the credential provider
-    const result = await db
-      .update(account)
-      .set({
-        password: hashedPassword,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(account.userId, userId),
-          eq(account.providerId, 'credential')
-        )
-      )
-      .returning();
-
-    // If no credential row was updated, respond with 404
-    if (!result || result.length === 0) {
+    // Check if result indicates success
+    if (!result) {
       return NextResponse.json(
-        { error: 'User account not found or no credential provider. This user may only have OAuth login.' },
-        { status: 404 }
+        { error: 'Failed to reset password' },
+        { status: 500 }
       );
     }
 
@@ -78,10 +67,19 @@ export async function POST(request: Request) {
     // Log errors in development only
     if (process.env.NODE_ENV === 'development') {
       console.error('[Reset Password API Error]:', error);
+      console.error('[Error Details]:', {
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : undefined,
+      });
     }
 
     return NextResponse.json(
-      { error: 'Failed to reset password' },
+      {
+        error: 'Failed to reset password',
+        details: process.env.NODE_ENV === 'development' && error instanceof Error
+          ? error.message
+          : undefined
+      },
       { status: 500 }
     );
   }

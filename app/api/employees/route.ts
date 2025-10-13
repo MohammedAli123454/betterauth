@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db';
 import { employee } from '@/db/schema';
 import { requireRole } from '@/lib/auth-utils';
-import { eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { slidingWindow } from '@arcjet/next';
 import { findIp } from '@arcjet/ip';
@@ -73,7 +72,7 @@ export async function GET(request: NextRequest) {
   const arcjetResponse = await protectGetRequest(request);
   if (arcjetResponse) return arcjetResponse;
   try {
-    const session = await requireRole(['user', 'super_user', 'admin']);
+    await requireRole(['user', 'super_user', 'admin']);
 
     const employees = await db.select().from(employee);
 

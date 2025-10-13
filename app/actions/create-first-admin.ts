@@ -3,8 +3,7 @@
 import { z } from 'zod';
 import { db } from '@/db';
 import { user } from '@/db/schema';
-import { eq } from 'drizzle-orm';
-import { authClient } from '@/lib/auth-client';
+import { auth } from '@/lib/auth';
 import { createAuditLog } from './audit-log';
 import { headers } from 'next/headers';
 
@@ -16,7 +15,7 @@ const createFirstAdminSchema = z.object({
 });
 
 /**
- * Create the first admin user using Better Auth
+ * Create the first admin user using Better Auth server-side API
  * This should only be called when the user table is empty
  * Requires a bootstrap token if FIRST_ADMIN_BOOTSTRAP_TOKEN is set
  */
@@ -60,57 +59,46 @@ export async function createFirstAdmin(data: {
       }
     }
 
-    // Use Better Auth's signup endpoint
-    const signupResult = await authClient.signUp.email({
-      email: data.email,
-      password: data.password,
-      name: data.name,
+    // Use Better Auth's server-side signUp API with admin role
+    const signupResult = await auth.api.signUpEmail({
+      body: {
+        email: data.email,
+        password: data.password,
+        name: data.name,
+        role: 'admin',
+      },
     });
 
-    if (signupResult.error) {
-      return {
-        success: false,
-        error: signupResult.error.message || 'Failed to create admin account'
-      };
+    // Check if signup was successful
+    const userId = signupResult?.user?.id;
+
+    if (!userId) {
+      return { success: false, error: 'Failed to create admin account' };
     }
 
-    // Promote the new user to admin
-    if (signupResult.data?.user?.id) {
-      await db
-        .update(user)
-        .set({
-          role: 'admin',
-          emailVerified: true,
-          updatedAt: new Date(),
-        })
-        .where(eq(user.id, signupResult.data.user.id));
+    // Get request metadata for audit log
+    const headersList = await headers();
+    const ipAddress = headersList.get('x-forwarded-for') ||
+                      headersList.get('x-real-ip') ||
+                      'unknown';
+    const userAgent = headersList.get('user-agent') || 'unknown';
 
-      // Get request metadata for audit log
-      const headersList = await headers();
-      const ipAddress = headersList.get('x-forwarded-for') ||
-                        headersList.get('x-real-ip') ||
-                        'unknown';
-      const userAgent = headersList.get('user-agent') || 'unknown';
+    // Create audit log entry
+    await createAuditLog({
+      userId,
+      action: 'FIRST_ADMIN_CREATED',
+      resource: 'user',
+      resourceId: userId,
+      details: {
+        email: data.email,
+        name: data.name,
+        tokenUsed: !!data.bootstrapToken,
+      },
+      ipAddress,
+      userAgent,
+    });
 
-      // Create audit log entry
-      await createAuditLog({
-        userId: signupResult.data.user.id,
-        action: 'FIRST_ADMIN_CREATED',
-        resource: 'user',
-        resourceId: signupResult.data.user.id,
-        details: {
-          email: data.email,
-          name: data.name,
-          tokenUsed: !!data.bootstrapToken,
-        },
-        ipAddress,
-        userAgent,
-      });
-
-      return { success: true, userId: signupResult.data.user.id };
-    }
-
-    return { success: false, error: 'Failed to retrieve user ID after signup' };
+    return { success: true, userId };
   } catch (error) {
     console.error('Error creating first admin:', error);
     return {

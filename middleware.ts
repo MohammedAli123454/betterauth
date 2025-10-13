@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { auth } from '@/lib/auth';
+import { betterFetch } from '@better-fetch/fetch';
 
 // Define route permissions
 const routePermissions: Record<string, string[]> = {
@@ -36,15 +36,17 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Get session from Better Auth
+  // Get session from Better Auth via HTTP (Edge Runtime compatible)
   let session;
   try {
-    session = await auth.api.getSession({
+    const baseURL = request.nextUrl.origin;
+    const response = await betterFetch<{ user: any } | null>(`${baseURL}/api/auth/get-session`, {
+      method: 'GET',
       headers: request.headers,
     });
+    session = response.data;
   } catch (error) {
-    // On database errors (like Neon connection issues), let the request through
-    // The page-level auth will handle it
+    // On errors, let the request through - page-level auth will handle it
     console.error('[Middleware] Session check failed:', error);
     return NextResponse.next();
   }

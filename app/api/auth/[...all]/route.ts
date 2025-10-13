@@ -3,7 +3,6 @@ import { toNextJsHandler } from 'better-auth/next-js';
 import {
   detectBot,
   protectSignup,
-  shield,
   slidingWindow,
 } from '@arcjet/next';
 import { findIp } from '@arcjet/ip';
@@ -13,7 +12,6 @@ import {
   emailSettings,
   authRateLimitSettings,
   laxRateLimitSettings,
-  shieldSettings,
   arcjetErrorMessages,
   getEmailErrorMessage,
 } from '@/lib/arcjet-config';

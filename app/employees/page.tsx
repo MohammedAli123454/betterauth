@@ -19,7 +19,7 @@ type Employee = {
 
 function EmployeesPageContent() {
   const currentUser = useCurrentUser();
-  const currentUserRole = currentUser?.role ?? 'user';
+  const currentUserRole = currentUser.role;
   const isAdmin = currentUserRole === 'admin';
   const isSuperUser = currentUserRole === 'super_user';
   const canCreate = isAdmin || isSuperUser;

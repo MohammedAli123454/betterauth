@@ -72,35 +72,44 @@ export default function LoginPage() {
     setMessage('');
 
     try {
-      const response = await fetch('/api/auth/sign-in/email', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
+      // Use Better Auth client method directly
+      const { data: session, error } = await authClient.signIn.email({
+        email: data.email,
+        password: data.password,
       });
 
-      const result = await response.json();
+      if (error) {
+        // Handle specific error messages
+        let errorMessage = error.message || 'Sign in failed';
 
-      if (!response.ok || result?.error) {
-        setMessage(result?.error || 'Sign in failed');
+        // Better Auth sometimes returns technical errors, make them user-friendly
+        const normalized = errorMessage.toLowerCase();
+
+        if (normalized.includes('invalid password hash') ||
+            normalized.includes('invalid') ||
+            normalized.includes('password') ||
+            normalized.includes('credentials')) {
+          errorMessage = 'Invalid email or password';
+        }
+
+        setMessage(errorMessage);
         return;
       }
 
-      // Clear cache and fetch fresh session
+      // Clear cache and get user role from session
       queryClient.clear();
-      const sessionResult = await authClient.getSession();
-      const sessionUser = sessionResult.data?.user;
+      const sessionUser = session?.user;
 
       if (!sessionUser) {
         setMessage('Unable to determine user session after authentication.');
         return;
       }
 
-      redirectToRole(sessionUser.role as UserRole);
+      // Type assertion for role property (added via Better Auth additionalFields)
+      redirectToRole((sessionUser as any).role as UserRole);
     } catch (error) {
       console.error('Sign in error:', error);
-      setMessage('Sign in failed');
+      setMessage('Invalid email or password');
     }
   };
 

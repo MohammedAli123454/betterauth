@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { ClipboardList, Users, FileText, LogOut, Lock } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { ConfirmDialog } from './ConfirmDialog';
+import { BarLoader } from 'react-spinners';
 
 type SidebarProps = {
   currentUser: {
@@ -155,6 +156,23 @@ export default function Sidebar({ currentUser }: SidebarProps) {
         cancelText="Cancel"
         variant="destructive"
       />
+
+      {/* Loading Overlay During Sign Out */}
+      {isSigningOut && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex flex-col items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 shadow-xl max-w-sm w-full mx-4">
+            <div className="text-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                Signing Out
+              </h3>
+              <p className="text-sm text-gray-600">
+                Please wait while we sign you out...
+              </p>
+            </div>
+            <BarLoader color="#3B82F6" width="100%" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
